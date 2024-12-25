@@ -27,7 +27,7 @@ local function promptString(prompt, default)
 end
 
 local function fetchFile(url, destination)
-    print(string.format("%s > %s", url, destination))
+    print(string.format("\n%s > %s", url, destination))
     if fs.exists(destination) then
         print(string.format("%s already exists, skipping", destination))
         return
