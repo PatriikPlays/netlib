@@ -13,8 +13,10 @@ local function promptBool(prompt, default)
 end
 
 local function promptString(prompt, default)
+    local x = ""
+    if default then x = " ("..default..")" end
     while true do
-        write(prompt..(default and (" ("..default..")") or ""))
+        write(prompt..x)
         local inp = read()
         if #inp > 0 then
             return inp
