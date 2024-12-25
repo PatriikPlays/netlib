@@ -73,9 +73,10 @@ end
 local installPrefix = "/netlib"
 
 print("\nNETLIB INSTALLER")
+print("================\n")
 
 if fs.exists(installPrefix) then
-    if promptBool(installPrefix.." exists, do you want to delete it? (config should be kept)", false) then
+    if promptBool("\n"..installPrefix.." exists, do you want to delete it? (config should be kept)", false) then
         local files = fs.list(installPrefix)
         for _,v in ipairs(files) do
             if v ~= "config" then
@@ -88,7 +89,7 @@ if fs.exists(installPrefix) then
     end
 end
 
-local indexPath = promptString("Path to installer index json: ", "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/installerIndex.json")
+local indexPath = promptString("\n".."Path to installer index json: ", "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/installerIndex.json")
 local index = parseIndex(indexPath)
 for k,v in pairs(index) do
     assert(type(k) == "string")
