@@ -6,6 +6,10 @@ netlib.EtherType = {
     ARP  = 0x0806
 }
 
+netlib.IPv4Protocol = {
+    UDP = 17
+}
+
 -- TODO: PROPER HANDLING FOR INVALID DATA
 netlib.struct.MACAddr = {
     fromBytes = function(o1,o2,o3,o4,o5,o6)
@@ -251,11 +255,11 @@ netlib.struct.IPv4Packet = {
 
 -- also no checksum, will implement if i decide to hook this up to a TAP
 netlib.struct.UDPDatagram = {
-    new = function(srcPort, dstPort, data)
+    new = function(srcPort, dstPort, payload)
         local t = {
             srcPort = srcPort,
             dstPort = dstPort,
-            data = data
+            payload = payload
         }
 
         setmetatable(t, {
@@ -270,22 +274,24 @@ netlib.struct.UDPDatagram = {
     end,
     fromBin = function(data)
         local srcPort, dstPort, length, checksum, endIndex = string.unpack(">I2I2I2I2", data)
-        local data = data:sub(endIndex, endIndex+length-8-1)
+        local payload = data:sub(endIndex, endIndex+length-8-1)
 
-        return netlib.struct.UDPDatagram.new(srcPort, dstPort, data)
+        return netlib.struct.UDPDatagram.new(srcPort, dstPort, payload)
     end,
     toBin = function(self)
-        return string.pack(">I2I2I2I2", self.srcPort, self.dstPort, 8+#self.data, 0)..data
+        return string.pack(">I2I2I2I2", self.srcPort, self.dstPort, 8+#self.payload, 0)..self.payload
     end
 }
 
-local function initEasy(modem, modemChannel, MAC, IPv4)
+local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
     modem.open(modemChannel)
     return {
         modem = modem,
         modemChannel = modemChannel,
         MAC = MAC,
         IPv4 = IPv4,
+        defaultMTU = defaultMTU,
+        defaultTTL = defaultTTL,
 
         internal = {
             arpCache = {
@@ -337,6 +343,9 @@ local function initEasy(modem, modemChannel, MAC, IPv4)
         end,
 
         sendIPv4 = function(self, mtu, destAddr, ttl, protocol, data) --TODO: dont fragment arg
+            mtu = assert(mtu or self.defaultMTU)
+            ttl = assert(ttl or self.defaultTTL)
+
             local destMAC = assert(self:ARPResolveIPv4(destAddr))
 
             local ethOverhead = 14
@@ -357,7 +366,29 @@ local function initEasy(modem, modemChannel, MAC, IPv4)
             end
         end,
 
-        --udpRecv = function(self,port )
+        udpRecv = function(self, dstPort, srcAddr)
+            while true do
+                local _, x = os.pullEvent("netlib_message")
+                if x.ipv4 and x.udp then
+                    local ipv4 = netlib.struct.IPv4Packet.fromBin(x.ipv4)
+                    local udp = netlib.struct.UDPDatagram.fromBin(x.udp)
+                    if dstPort == udp.dstPort then
+                        if not srcAddr then
+                            return udp, ipv4
+                        elseif srcAddr:toBin() == ipv4.src:toBin() then
+                            return udp, ipv4
+                        end
+                    end
+                end
+            end
+        end,
+
+        udpSend = function(self, mtu, ttl, dstAddr, srcPort, dstPort, payload)
+            mtu = assert(mtu or self.defaultMTU)
+            ttl = assert(ttl or self.defaultTTL)
+
+            self:sendIPv4(mtu, dstAddr, ttl, netlib.IPv4Protocol.UDP, netlib.struct.UDPDatagram.new(srcPort, dstPort, payload):toBin())
+        end,
 
         run = function(self)
             local function arpHandler(msg)
@@ -444,6 +475,13 @@ local function initEasy(modem, modemChannel, MAC, IPv4)
                                     else
                                         self.internal.ipv4ReassemblyCache.data[cacheIndex] = nil
                                     end
+                                end
+                            end
+                            if eventMessage["ipv4"] then
+                                local p = netlib.struct.IPv4Packet.fromBin(eventMessage["ipv4"]) -- peak efficiency
+                                if p.proto == netlib.IPv4Protocol.UDP then
+                                    local udp = netlib.struct.UDPDatagram.fromBin(p.data)
+                                    eventMessage["udp"] = udp:toBin() -- even more peak efficiency, data validation via error
                                 end
                             end
                         end
