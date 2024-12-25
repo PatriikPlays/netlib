@@ -79,8 +79,8 @@ if fs.exists(installPrefix) then
         local files = fs.list(installPrefix)
         for _,v in ipairs(files) do
             if v ~= "config" then
-                print("Deleting "..v)
-                fs.delete(fs.combine(installPrefix, v))
+                print("Deleting ".."/"..fs.combine(installPrefix, v))
+                fs.delete("/"..fs.combine(installPrefix, v))
             end
         end
     else
@@ -88,7 +88,7 @@ if fs.exists(installPrefix) then
     end
 end
 
-local indexPath = promptString("Path to index json: ")
+local indexPath = promptString("Path to installer index json: ", "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/installerIndex.json")
 local index = parseIndex(indexPath)
 for k,v in pairs(index) do
     assert(type(k) == "string")
