@@ -14,7 +14,7 @@ end
 
 local function promptString(prompt, default)
     while true do
-        write(prompt..(default and " ("..default..")"))
+        write(prompt..(default and (" ("..default..")") or ""))
         local inp = read()
         if #inp > 0 then
             return inp
