@@ -99,21 +99,22 @@ for k,v in pairs(index) do
 end
 
 print("================\n")
-if fs.exists("/startup.lua") then
-    local modifyStartup = promptBool("Add nltlco.lua to startup.lua?", false)
+local modifyStartup = promptBool("Add nltlco.lua to startup.lua?", false)
 
-    if modifyStartup then
+if modifyStartup then
+    local d = ""
+    if fs.exists("/startup.lua") then
         local h = fs.open("/startup.lua", "r")
-        local d = h.readAll()
-        h.close()
-
-        local h = fs.open("/startup.lua", "w")
-        h.writeLine(string.format([[shell.run("%s")]], joinPaths(installPrefix, "nltlco.lua")))
-        h.write(d)
+        d = h.readAll()
         h.close()
     end
-    print("================\n")
+
+    local h = fs.open("/startup.lua", "w")
+    h.writeLine(string.format([[shell.run("%s")]], joinPaths(installPrefix, "nltlco.lua")))
+    h.write(d)
+    h.close()
 end
+print("================\n")
 
 local editConfig = promptBool("Edit easyconfig?", true)
 
