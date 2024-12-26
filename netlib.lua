@@ -398,7 +398,7 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                     modem.transmit(self.modemChannel, self.modemChannel, netlib.struct.EthernetFrame.new(netlib.struct.MACAddr.fromBin(msg.sha), self.MAC, netlib.EtherType.ARP, netlib.struct.ARP.new(1,0x0800,6,4,2,self.MAC:toBin(),self.IPv4:toBin(),msg.sha,msg.spa):toBin()):toBin())
                 elseif msg.operation == 2 and ((msg.tha == self.MAC:toBin() and msg.tpa == self.IPv4:toBin()) or msg.tha == "\xFF\xFF\xFF\xFF\xFF\xFF") then
                     self.internal.arpCache.data[msg.spa] = {os.epoch("utc"), msg.sha}
-                    print("arp update!!!!", netlib.struct.IPv4Addr.fromBin(msg.spa), netlib.struct.MACAddr.fromBin(self.internal.arpCache.data[msg.spa][2]))
+                    --print("arp update!!!!", netlib.struct.IPv4Addr.fromBin(msg.spa), netlib.struct.MACAddr.fromBin(self.internal.arpCache.data[msg.spa][2]))
                     os.queueEvent("netlib_arp_update", msg.spa, self.internal.arpCache.data[msg.spa][2])
                 end
             end
