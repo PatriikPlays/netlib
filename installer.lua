@@ -115,4 +115,10 @@ if fs.exists("/startup.lua") then
     print("================\n")
 end
 
-print("done")
+local editConfig = promptBool("Edit easyconfig?", true)
+
+if editConfig then
+    shell.run("edit "..joinPaths(installPrefix, "config/easyconfig.lua"))
+end
+
+print("\nDone!")

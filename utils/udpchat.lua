@@ -100,7 +100,7 @@ local function client(serverAddr, serverPort, nickname)
 
     local function join()
         local messageIDBin = string.pack(">I4", messageID)
-        netlibEasy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["join"])..messageIDBin..nickname)
+        netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["join"])..messageIDBin..nickname)
         messageID = messageID + 1
 
         local ok = false
@@ -219,7 +219,7 @@ local function client(serverAddr, serverPort, nickname)
         while true do
             sleep(1)
             if lastMessageTime + 16000 <= os.epoch("utc") then
-                netlibEasy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
+                netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
                 error("server timed out")
             end
         end
@@ -236,10 +236,10 @@ local function client(serverAddr, serverPort, nickname)
 
             local sChat = read(nil, tSendHistory)
             if string.match(sChat, "^/leave") then
-                netlibEasy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
+                netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
                 error("left")
             else
-                netlibEasy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["message"])..sChat)
+                netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["message"])..sChat)
                 table.insert(tSendHistory, sChat)
             end
         end

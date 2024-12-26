@@ -2,6 +2,6 @@
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/netlib.lua": "netlib.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/nltlco.lua": "nltlco.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/config/easyconfig.lua": "config/easyconfig.lua",
-    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/utils/switch.lua": "utils/netlib.lua",
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/utils/switch.lua": "utils/switch.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/utils/udpchat.lua": "utils/udpchat.lua"
 }
