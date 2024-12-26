@@ -107,7 +107,7 @@ tlco(
                 easyConfig = dofile(easyConfigPath)
             end
 
-            local function saveEasyConfig()
+            local function saveEasyConfig() -- FIXME: nil values dont get saved, maybe we should pick a different value to mark stuff as unset?
                 if fs.getFreeSpace(path) < 8192 then
                     printError("netlib: low space")
                 end
@@ -159,9 +159,22 @@ tlco(
                     easyConfig.defaultTTL
                 )
 
+                setfenv(_G.netlib.easy.run, setmetatable({
+                    os = setmetatable({
+                        pullEvent = function(filter)
+                            while true do
+                                local ev = {os.pullEventRaw(filter)}
+                                if ev[1] ~= "terminate" then
+                                    return table.unpack(ev)
+                                end
+                            end
+                        end
+                    }, { __index = _G.os })
+                }, { __index = _G }))
+                
                 _G.netlib.easy:run()
             else
-                while true do os.pullEvent() end
+                while true do os.pullEventRaw() end
             end
         end, function(err)
             _G.netlib = nil

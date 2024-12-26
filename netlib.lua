@@ -346,7 +346,10 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             mtu = assert(mtu or self.defaultMTU)
             ttl = assert(ttl or self.defaultTTL)
 
-            local destMAC = assert(self:ARPResolveIPv4(destAddr))
+            local destMAC = self:ARPResolveIPv4(destAddr)
+            if not destMAC then
+                return false
+            end
 
             local ethOverhead = 14
             local maxIPv4TotalSize = mtu-14
@@ -364,6 +367,8 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                 modem.transmit(self.modemChannel, self.modemChannel, netlib.struct.EthernetFrame.new(destMAC, self.MAC, netlib.EtherType.IPv4, netlib.struct.IPv4Packet.new(0,ipv4Id,lastFragment and 0 or 1, fragoff, ttl, protocol, self.IPv4, destAddr, frag):toBin()):toBin())
                 fragoff = fragoff + #frag/8
             end
+
+            return true
         end,
 
         udpRecv = function(self, dstPort, srcAddr)
@@ -387,7 +392,7 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             mtu = assert(mtu or self.defaultMTU)
             ttl = assert(ttl or self.defaultTTL)
 
-            self:sendIPv4(mtu, dstAddr, ttl, netlib.IPv4Protocol.UDP, netlib.struct.UDPDatagram.new(srcPort, dstPort, payload):toBin())
+            return self:sendIPv4(mtu, dstAddr, ttl, netlib.IPv4Protocol.UDP, netlib.struct.UDPDatagram.new(srcPort, dstPort, payload):toBin())
         end,
 
         run = function(self)
