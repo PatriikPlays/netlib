@@ -110,7 +110,7 @@ if modifyStartup then
     end
 
     local h = fs.open("/startup.lua", "w")
-    h.writeLine(string.format([[shell.run("%s")]], joinPaths(installPrefix, "nltlco.lua")))
+    h.writeLine(string.format([[if not _G["_nltlco-6b10affc-757d-4007-a0d3-06d51b1469b5"] then shell.run("%s"); return end]], joinPaths(installPrefix, "nltlco.lua")))
     h.write(d)
     h.close()
 end

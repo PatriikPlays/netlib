@@ -22,6 +22,17 @@ local function tlco(fn, name)
             pcall(
             parallel.waitForAny,
             function()
+                do
+                    local timer = os.startTimer(2)
+                    while true do
+                        local ev, a1 = os.pullEventRaw()
+                        if ev == "timer" and a1 == timer then
+                            break
+                        elseif ev == "nltlco_loaded" and a1 == "5a433f17-efe1-42d0-9927-875653c3e2a6" then
+                            break
+                        end
+                    end
+                end
                 local sShell
                 if term.isColour() and settings.get("bios.use_multishell") then
                     sShell = "rom/programs/advanced/multishell.lua"
@@ -171,7 +182,8 @@ tlco(
                         end
                     }, { __index = _G.os })
                 }, { __index = _G }))
-                
+
+                os.queueEvent("nltlco_loaded", "5a433f17-efe1-42d0-9927-875653c3e2a6")
                 _G.netlib.easy:run()
             else
                 while true do os.pullEventRaw() end
