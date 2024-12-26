@@ -99,17 +99,20 @@ for k,v in pairs(index) do
 end
 
 print("================\n")
-local modifyStartup = promptBool("Add nltlco.lua to startup.lua?", false)
+if fs.exists("/startup.lua") then
+    local modifyStartup = promptBool("Add nltlco.lua to startup.lua?", false)
 
-if modifyStartup then
-    local h = fs.open("/startup.lua", "r")
-    local d = h.readAll()
-    h.close()
+    if modifyStartup then
+        local h = fs.open("/startup.lua", "r")
+        local d = h.readAll()
+        h.close()
 
-    local h = fs.open("/startup.lua", "w")
-    h.writeLine(string.format([[shell.run("%s")]], joinPaths(installPrefix, "nltlco.lua")))
-    h.write(d)
-    h.close()
+        local h = fs.open("/startup.lua", "w")
+        h.writeLine(string.format([[shell.run("%s")]], joinPaths(installPrefix, "nltlco.lua")))
+        h.write(d)
+        h.close()
+    end
+    print("================\n")
 end
 
 print("done")
