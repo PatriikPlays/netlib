@@ -27,7 +27,7 @@ local function server(port)
 
     local function send(connID, payload)
         local numdst, dstPort = string.unpack(">I4I2", connID)
-        local dstAddr = netlib.struct.IPv4Addr.fromInt(numdst)
+        local dstAddr = select(2, netlib.struct.IPv4Addr.fromInt(numdst))
         netlib.easy:udpSend(nil, nil, dstAddr, port, dstPort, payload)
     end
 
@@ -175,29 +175,29 @@ local function client(serverAddr, serverPort, nickname)
                     if type == typesS2C["messageBroadcast"] then
                         local userAddrNum, userPort, nicknameLength = string.unpack(">I4I2I1", udp.payload:sub(2,8))
                         assert(nicknameLength > 0)
-                        local userAddr = netlib.struct.IPv4Addr.fromInt(userAddrNum)
+                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
                         local nickname = udp.payload:sub(9,nicknameLength+8)
                         local message = udp.payload:sub(9+nicknameLength)
 
                         printMessage(string.format("<%s@%s:%d>: %s", nickname, userAddr:toString(), userPort, message), textColour)
                     elseif type == typesS2C["joinBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = netlib.struct.IPv4Addr.fromInt(userAddrNum)
+                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
                         local nickname = udp.payload:sub(8,16+7)
                         printMessage(string.format("<%s@%s:%d> joined", nickname, userAddr:toString(), userPort), highlightColour)
                     elseif type == typesS2C["leaveBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = netlib.struct.IPv4Addr.fromInt(userAddrNum)
+                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
                         local nickname = udp.payload:sub(8,16+7)
                         printMessage(string.format("<%s@%s:%d> left", nickname, userAddr:toString(), userPort), highlightColour)
                     elseif type == typesS2C["kickBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = netlib.struct.IPv4Addr.fromInt(userAddrNum)
+                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
                         local nickname = udp.payload:sub(8,16+7)
                         printMessage(string.format("<%s@%s:%d> kicked", nickname, userAddr:toString(), userPort), highlightColour)
                     elseif type == typesS2C["timeoutBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = netlib.struct.IPv4Addr.fromInt(userAddrNum)
+                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
                         local nickname = udp.payload:sub(8,16+7)
                         printMessage(string.format("<%s@%s:%d> timed out", nickname, userAddr:toString(), userPort), highlightColour)
                     elseif type == typesS2C["kick"] then
@@ -336,7 +336,9 @@ elseif args[1] == "join" then
         return
     end
 
-    client(netlib.struct.IPv4Addr.fromString(args[2]), tonumber(args[3]), args[4])
+    local suc, saddr = netlib.struct.IPv4Addr.fromString(args[2])
+    assert(suc, saddr)
+    client(saddr, tonumber(args[3]), args[4])
 else
     printUsage()
 end

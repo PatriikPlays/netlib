@@ -1,6 +1,5 @@
 -- works, but not very well tested
-
-local netlib = require("netlib")
+assert(netlib, "netlib not loaded")
 
 local function turnOnAllComputers()
   for _,v in ipairs(peripheral.getNames()) do
@@ -44,35 +43,39 @@ parallel.waitForAll(
       local _, side, channel, replyChannel, message = os.pullEvent("modem_message")
       if channel == MODEM_CHANNEL and replyChannel == MODEM_CHANNEL then
         local s,e = pcall(function()
-          local ethernetFrame = netlib.struct.EthernetFrame.fromBin(message)
-          if not ethernetFrame.src:isBroadcast() and not ethernetFrame.src:isGroup() then
-            if ethernetFrame.dst:isBroadcast() or ethernetFrame.dst:isGroup() then
-              for k,v in pairs(modems) do
-                if k ~= side then
-                  peripheral.call(k, "transmit", MODEM_CHANNEL, MODEM_CHANNEL, message)
-                end
-              end
-            else
-              macCache[ethernetFrame.src:toBin()] = {os.epoch("utc")+macCacheTimeout, side}
-
-              local c = macCache[ethernetFrame.dst:toBin()]
-              if c and c[1] <= os.epoch("utc") then
-                c = nil
-                macCache[ethernetFrame.dst:toBin()] = nil
-              end
-
-              if c then
-                if c[2] ~= side then
-                  peripheral.call(c[2], "transmit", MODEM_CHANNEL, MODEM_CHANNEL, message)
-                end
-              else
+          local success, ethernetFrame = netlib.struct.EthernetFrame.fromBin(message)
+          if success then
+            if not ethernetFrame.src:isBroadcast() and not ethernetFrame.src:isGroup() then
+              if ethernetFrame.dst:isBroadcast() or ethernetFrame.dst:isGroup() then
                 for k,v in pairs(modems) do
                   if k ~= side then
                     peripheral.call(k, "transmit", MODEM_CHANNEL, MODEM_CHANNEL, message)
                   end
                 end
+              else
+                macCache[ethernetFrame.src:toBin()] = {os.epoch("utc")+macCacheTimeout, side}
+
+                local c = macCache[ethernetFrame.dst:toBin()]
+                if c and c[1] <= os.epoch("utc") then
+                  c = nil
+                  macCache[ethernetFrame.dst:toBin()] = nil
+                end
+
+                if c then
+                  if c[2] ~= side then
+                    peripheral.call(c[2], "transmit", MODEM_CHANNEL, MODEM_CHANNEL, message)
+                  end
+                else
+                  for k,v in pairs(modems) do
+                    if k ~= side then
+                      peripheral.call(k, "transmit", MODEM_CHANNEL, MODEM_CHANNEL, message)
+                    end
+                  end
+                end
               end
             end
+          else
+            printError("invalid ethernet frame")
           end
         end)
 

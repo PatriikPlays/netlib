@@ -23,7 +23,7 @@ local function tlco(fn, name)
             parallel.waitForAny,
             function()
                 do
-                    local timer = os.startTimer(2)
+                    local timer = os.startTimer(5)
                     while true do
                         local ev, a1 = os.pullEventRaw()
                         if ev == "timer" and a1 == timer then
@@ -161,11 +161,17 @@ tlco(
                     modem = assert(peripheral.find("modem"), "no modems found")
                 end
 
+                local s, mac = netlib.struct.MACAddr.fromString(easyConfig.MAC)
+                assert(s, "easyConfig.MAC is invalid: "..tostring(mac))
+
+                local s, ipv4 = netlib.struct.IPv4Addr.fromString(easyConfig.IPv4)
+                assert(s, "easyConfig.IPv4 is invalid: "..tostring(ipv4))
+
                 _G.netlib.easy = _G.netlib.initEasy(
                     modem,
                     easyConfig.modemChannel,
-                    netlib.struct.MACAddr.fromString(easyConfig.MAC),
-                    netlib.struct.IPv4Addr.fromString(easyConfig.IPv4),
+                    mac,
+                    ipv4,
                     easyConfig.defaultMTU,
                     easyConfig.defaultTTL
                 )
