@@ -443,7 +443,7 @@ netlib.struct.ARP = {
     --- @return boolean success Whether the ARP instance was successfully created.
     --- @return ARP|string ret The created ARP instance. Error message if success is false.
     fromBin = function(data)
-        if not tc.string(data, 8, 8) then return false, "ARP.fromBin failed to create ARP: data must be a string longer than 8 bytes" end 
+        if not tc.string(data, 8) then return false, "ARP.fromBin failed to create ARP: data must be a string longer than 8 bytes" end 
         local htype, ptype, hlen, plen, operation = string.unpack(">I2I2I1I1I2", data)
         if not tc.string(data, 8+hlen*2+plen*2) then return false, "ARP.fromBin failed to create ARP: data must be a string longer than 8+hlen*2+plen*2 bytes" end
         local remdata = data:sub(9)
@@ -491,8 +491,8 @@ netlib.struct.IPv4Packet = {
         if not tc.integer(fragoff, 0, 8191) then return false, "IPv4Packet.new failed to create IPv4Packet: fragoff must be an unsigned integer between 0 and 8191 inclusive" end
         if not tc.u8(ttl) then return false, "IPv4Packet.new failed to create IPv4Packet: ttl must be a 8-bit unsigned integer" end
         if not tc.u8(proto) then return false, "IPv4Packet.new failed to create IPv4Packet: proto must be a 8-bit unsigned integer" end
-        if not type(src) == "table" or src["__type"] ~= "IPv4Addr" then return false, "IPv4Packet.new failed to create IPv4Packet: src must be an IPv4Addr instance" end
-        if not type(dst) == "table" or dst["__type"] ~= "IPv4Addr" then return false, "IPv4Packet.new failed to create IPv4Packet: dst must be an IPv4Addr instance" end
+        if type(src) ~= "table" or src["__type"] ~= "IPv4Addr" then return false, "IPv4Packet.new failed to create IPv4Packet: src must be an IPv4Addr instance" end
+        if type(dst) ~= "table" or dst["__type"] ~= "IPv4Addr" then return false, "IPv4Packet.new failed to create IPv4Packet: dst must be an IPv4Addr instance" end
         if not tc.string(data) then return false, "IPv4Packet.new failed to create IPv4Packet: data must be a string" end
 
         local t = {
@@ -541,7 +541,7 @@ netlib.struct.IPv4Packet = {
         local payload = data:sub(headerEnd,headerEnd+total_len-ihl*4-1)
 
         --- @diagnostic disable-next-line: param-type-mismatch
-        return netlib.struct.IPv4Packet.new(tos, id, flags, fragoff, ttl, proto, netlib.struct.IPv4Addr.fromInt(src), netlib.struct.IPv4Addr.fromInt(dst), payload)
+        return netlib.struct.IPv4Packet.new(tos, id, flags, fragoff, ttl, proto, select(2, netlib.struct.IPv4Addr.fromInt(src)), select(2, netlib.struct.IPv4Addr.fromInt(dst)), payload)
     end,
 
     --- Convert an IPv4Packet instance to a binary string.
@@ -650,7 +650,9 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             if self.internal.arpCache.data[addr:toBin()] then
                 local v = self.internal.arpCache.data[addr:toBin()]
                 if v[1]+self.internal.arpCache.cacheInvalidateTimeout > os.epoch("utc") then
-                    return netlib.struct.MACAddr.fromBin(v[2])
+                    local success, ret = netlib.struct.MACAddr.fromBin(v[2])
+                    assert(success, ret)
+                    return ret
                 else
                     self.internal.arpCache.data[addr:toBin()] = nil
                 end
@@ -682,7 +684,9 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                     return
                 elseif ev == "netlib_arp_update" and a1 == addr:toBin() and type(a2) == "string" then
                     --- @cast a2 string
-                    return select(2, netlib.struct.MACAddr.fromBin(a2))
+                    local success, arp = netlib.struct.MACAddr.fromBin(a2)
+                    assert(success, arp)
+                    return arp
                 end
             end
         end,
@@ -709,9 +713,15 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             for i,frag in ipairs(fragments) do
                 local lastFragment = i==#fragments
 
-                local ipv4Packet = select(2, netlib.struct.IPv4Packet.new(0,ipv4Id,lastFragment and 0 or 1, fragoff, ttl, protocol, self.IPv4, destAddr, frag)):toBin()
-                local frame = select(2, netlib.struct.EthernetFrame.new(destMAC, self.MAC, netlib.EtherType.IPv4, ipv4Packet)):toBin()
-                modem.transmit(self.modemChannel, self.modemChannel, frame)
+                local success, ipv4Packet = netlib.struct.IPv4Packet.new(0,ipv4Id,lastFragment and 0 or 1, fragoff, ttl, protocol, self.IPv4, destAddr, frag)
+                assert(success, ipv4Packet)
+                --- @cast ipv4Packet IPv4Packet
+
+                local success, frame = netlib.struct.EthernetFrame.new(destMAC, self.MAC, netlib.EtherType.IPv4, ipv4Packet:toBin())
+                assert(success, frame)
+                --- @cast frame EthernetFrame
+                
+                modem.transmit(self.modemChannel, self.modemChannel, frame:toBin())
                 fragoff = fragoff + #frag/8
             end
 
@@ -782,7 +792,7 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                                     arpHandler(arpMessage)
                                     eventMessage["arp"] = ethernetFrame.data
                                 else
-                                    print("failed to parse arp packet")
+                                    print("failed to parse arp packet "..tostring(arpMessage))
                                 end
                             elseif ethernetFrame.ethertype == netlib.EtherType.IPv4 then
                                 local success, ipv4Packet = netlib.struct.IPv4Packet.fromBin(ethernetFrame.data)
@@ -852,14 +862,14 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                                         end
                                     end
                                 else
-                                    print("failed to parse ipv4 packet")
+                                    print("failed to parse ipv4 packet "..tostring(ipv4Packet))
                                 end
                             end
     
                             os.queueEvent("netlib_message", eventMessage)
                         end
                     else
-                        print("failed to parse ethernet frame")
+                        print("failed to parse ethernet frame "..tostring(ethernetFrame))
                     end
                 elseif ev == "timer" and a1 == cacheCleanTimer then
                     for k,v in pairs(self.internal.arpCache.data) do
