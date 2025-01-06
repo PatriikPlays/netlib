@@ -370,7 +370,7 @@ netlib.struct.EthernetFrame = {
     --- @return string ret A binary string representing the ethernet frame.
     toBin = function(self)
         assert(type(self) == "table" and self["__type"] == "EthernetFrame")
-        return string.pack(">c6c6I2", self.dst:toBin(), self.src:toBin(), self.ethertype)..self.data..("\0"):rep(46-#self.data).."\0\0\0\0" -- TODO: FCS
+        return string.pack(">c6c6I2", self.dst:toBin(), self.src:toBin(), self.ethertype)..self.data..("\0"):rep(46-#self.data).."\0\0\0\0"
     end
 }
 
@@ -610,9 +610,28 @@ netlib.struct.UDPDatagram = {
     end
 }
 
+--- Initialize a new NetlibEasy instance.
+--- @param modem table
+--- @param modemChannel number
+--- @param MAC MACAddr
+--- @param IPv4 IPv4Addr
+--- @param defaultMTU number
+--- @param defaultTTL number
+--- @return NetlibEasy
 local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
     modem.open(modemChannel)
-    return {
+
+    --- @class NetlibEasy
+    --- @field internal table Internal data used by the NetlibEasy instance.
+    --- @field MAC MACAddr The MAC address of the NetlibEasy instance.
+    --- @field IPv4 IPv4Addr The IPv4 address of the NetlibEasy instance.
+    --- @field defaultMTU number The default MTU of the NetlibEasy instance.
+    --- @field defaultTTL number The default TTL of the NetlibEasy instance.
+    --- @field modem table The modem peripheral of the NetlibEasy instance.
+    --- @field modemChannel number The modem channel of the NetlibEasy instance.
+    local easy = {
+        __type = "NetlibEasy",
+
         modem = modem,
         modemChannel = modemChannel,
         MAC = MAC,
@@ -644,14 +663,25 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             }
         },
 
+        --- Resolve an IPv4 address to a MAC address.
+        --- @param self NetlibEasy
+        --- @param addr IPv4Addr The IPv4 address to resolve.
+        --- @param timeout number The timeout in seconds.
+        --- @return MACAddr|nil ret The resolved MAC address, or nil if the resolution failed.
         ARPResolveIPv4 = function(self, addr, timeout) --TODO: check if we have the ip address?
             timeout = timeout or 5
+
+            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.ARPResolveIPv4: self must be a NetlibEasy instance, got "..type(self))
+            assert(type(addr) == "table" and addr["__type"] == "IPv4Addr", "NetlibEasy.ARPResolveIPv4: addr must be an IPv4Addr instance, got "..type(addr))
+            assert(tc.number(timeout, 0), "NetlibEasy.ARPResolveIPv4: timeout must be a number greater than 0, got "..type(timeout))
 
             if self.internal.arpCache.data[addr:toBin()] then
                 local v = self.internal.arpCache.data[addr:toBin()]
                 if v[1]+self.internal.arpCache.cacheInvalidateTimeout > os.epoch("utc") then
                     local success, ret = netlib.struct.MACAddr.fromBin(v[2])
                     assert(success, ret)
+
+                    --- @cast ret MACAddr
                     return ret
                 else
                     self.internal.arpCache.data[addr:toBin()] = nil
@@ -686,14 +716,31 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                     --- @cast a2 string
                     local success, arp = netlib.struct.MACAddr.fromBin(a2)
                     assert(success, arp)
+                    --- @cast arp MACAddr
                     return arp
                 end
             end
         end,
 
-        sendIPv4 = function(self, mtu, destAddr, ttl, protocol, data) --TODO: dont fragment arg
-            mtu = assert(mtu or self.defaultMTU)
-            ttl = assert(ttl or self.defaultTTL)
+        --- Send an IPv4 packet.
+        --- @param self NetlibEasy
+        --- @param mtu number The MTU of the packet, defaults to self.defaultMTU.
+        --- @param destAddr IPv4Addr The destination address of the packet.
+        --- @param ttl number|nil The TTL of the packet, defaults to self.defaultTTL.
+        --- @param protocol number The protocol of the packet.
+        --- @param data string The payload of the packet.
+        --- @return boolean ret True if the packet was sent successfully, false otherwise.
+        sendIPv4 = function(self, mtu, destAddr, ttl, protocol, data)
+            mtu = mtu or self.defaultMTU
+            ttl = ttl or self.defaultTTL
+
+            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.sendIPv4: self must be a NetlibEasy instance, got "..type(self))
+            assert(tc.integer(mtu), "NetlibEasy.sendIPv4: mtu must be an integer, got "..type(mtu))
+            assert(tc.u8(ttl), "NetlibEasy.sendIPv4: ttl must be a 8-bit unsigned integer, got "..type(ttl))
+            assert(type(destAddr) == "table" and destAddr["__type"] == "IPv4Addr", "NetlibEasy.sendIPv4: destAddr must be an IPv4Addr instance, got "..type(destAddr))
+            assert(tc.u16(protocol), "NetlibEasy.sendIPv4: protocol must be a 16-bit unsigned integer, got "..type(protocol))
+            assert(type(data) == "string", "NetlibEasy.sendIPv4: data must be a string, got "..type(data))
+
 
             local destMAC = self:ARPResolveIPv4(destAddr)
             if not destMAC then
@@ -728,7 +775,18 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             return true
         end,
 
+        --- Receives a UDP datagram.
+        --- comment
+        --- @param self NetlibEasy 
+        --- @param dstPort number 
+        --- @param srcAddr IPv4Addr|nil
+        --- @return UDPDatagram
+        --- @return IPv4Packet
         udpRecv = function(self, dstPort, srcAddr)
+            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.udpRecv: self must be a NetlibEasy instance, got "..type(self))
+            assert(tc.u16(dstPort), "NetlibEasy.udpRecv: dstPort must be a 16-bit unsigned integer, got "..type(dstPort))
+            assert(type(srcAddr) == "nil" or (type(srcAddr) == "table" and srcAddr["__type"] == "IPv4Addr"), "NetlibEasy.udpRecv: srcAddr must be an IPv4Addr instance, got "..type(srcAddr))
+
             while true do
                 local _, x = os.pullEvent("netlib_message")
                 if x.ipv4 and x.udp then
@@ -745,7 +803,24 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             end
         end,
 
+        --- Send a UDP datagram.
+        --- @param self NetlibEasy 
+        --- @param mtu number 
+        --- @param ttl number 
+        --- @param dstAddr IPv4Addr 
+        --- @param srcPort number 
+        --- @param dstPort number 
+        --- @param payload string 
+        --- @return boolean
         udpSend = function(self, mtu, ttl, dstAddr, srcPort, dstPort, payload)
+            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.udpSend: self must be a NetlibEasy instance, got "..type(self))
+            assert(type(mtu) == "number", "NetlibEasy.udpSend: mtu must be a number, got "..type(mtu))
+            assert(type(ttl) == "number", "NetlibEasy.udpSend: ttl must be a number, got "..type(ttl))
+            assert(type(dstAddr) == "table" and dstAddr["__type"] == "IPv4Addr", "NetlibEasy.udpSend: dstAddr must be an IPv4Addr instance, got "..type(dstAddr))
+            assert(tc.u16(srcPort), "NetlibEasy.udpSend: srcPort must be a 16-bit unsigned integer, got "..type(srcPort))
+            assert(tc.u16(dstPort), "NetlibEasy.udpSend: dstPort must be a 16-bit unsigned integer, got "..type(dstPort))
+            assert(type(payload) == "string", "NetlibEasy.udpSend: payload must be a string, got "..type(payload))
+
             mtu = assert(mtu or self.defaultMTU)
             ttl = assert(ttl or self.defaultTTL)
 
@@ -756,7 +831,11 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             return self:sendIPv4(mtu, dstAddr, ttl, netlib.IPv4Protocol.UDP, udpdg:toBin())
         end,
 
+        --- Run the NetlibEasy instance.
+        --- @param self NetlibEasy
         run = function(self)
+            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.run: self must be a NetlibEasy instance, got "..type(self))
+            
             local function arpHandler(msg)
                 if msg.htype ~= 1 or msg.ptype ~= netlib.EtherType.IPv4 or msg.hlen ~= 6 or msg.plen ~= 4 then return end
 
@@ -774,10 +853,11 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             end
 
             local cacheCleanTimer = os.startTimer(15)
+            local modemName = peripheral.getName(self.modem)
             while true do
                 local ev, a1, channel, replyChannel, message = os.pullEvent()
                 --if ev == "modem_message" then print(channel, replyChannel, message) end
-                if ev == "modem_message" and channel == self.modemChannel and replyChannel == self.modemChannel then -- TODO: check if side is same as our modem, pcall
+                if ev == "modem_message" and channel == self.modemChannel and replyChannel == self.modemChannel and a1 == modemName then -- TODO: pcall
                     --- @diagnostic disable-next-line: param-type-mismatch
                     local success, ethernetFrame = netlib.struct.EthernetFrame.fromBin(message)
                     if success then
@@ -840,6 +920,7 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
                                                     local lastPacket = fragments[#fragments]
                                                     self.internal.ipv4ReassemblyCache.data[cacheIndex] = nil
                                         
+                                                    -- TODO: check if all fragments have same header fields
                                                     local recPacket = select(2, netlib.struct.IPv4Packet.new(lastPacket.tos,lastPacket.id,lastPacket.flags, 0, lastPacket.ttl, lastPacket.proto, lastPacket.src, lastPacket.dst, recPayload))
                                                     ipv4Handler(recPacket)
                                                     eventMessage["ipv4"] = recPacket:toBin()
@@ -895,6 +976,8 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             end
         end
     }
+
+    return easy
 end
 
 netlib.initEasy = initEasy
