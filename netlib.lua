@@ -813,6 +813,9 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
         --- @param payload string 
         --- @return boolean
         udpSend = function(self, mtu, ttl, dstAddr, srcPort, dstPort, payload)
+            mtu = assert(mtu or self.defaultMTU)
+            ttl = assert(ttl or self.defaultTTL)
+            
             assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.udpSend: self must be a NetlibEasy instance, got "..type(self))
             assert(type(mtu) == "number", "NetlibEasy.udpSend: mtu must be a number, got "..type(mtu))
             assert(type(ttl) == "number", "NetlibEasy.udpSend: ttl must be a number, got "..type(ttl))
@@ -820,9 +823,6 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             assert(tc.u16(srcPort), "NetlibEasy.udpSend: srcPort must be a 16-bit unsigned integer, got "..type(srcPort))
             assert(tc.u16(dstPort), "NetlibEasy.udpSend: dstPort must be a 16-bit unsigned integer, got "..type(dstPort))
             assert(type(payload) == "string", "NetlibEasy.udpSend: payload must be a string, got "..type(payload))
-
-            mtu = assert(mtu or self.defaultMTU)
-            ttl = assert(ttl or self.defaultTTL)
 
             local suc, udpdg = netlib.struct.UDPDatagram.new(srcPort, dstPort, payload)
             assert(suc, udpdg)
