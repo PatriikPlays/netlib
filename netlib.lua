@@ -735,7 +735,7 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
             ttl = ttl or self.defaultTTL
 
             assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.sendIPv4: self must be a NetlibEasy instance, got "..type(self))
-            assert(tc.integer(mtu), "NetlibEasy.sendIPv4: mtu must be an integer, got "..type(mtu))
+            assert(tc.u16(mtu), "NetlibEasy.sendIPv4: mtu must be an integer, got "..type(mtu))
             assert(tc.u8(ttl), "NetlibEasy.sendIPv4: ttl must be a 8-bit unsigned integer, got "..type(ttl))
             assert(type(destAddr) == "table" and destAddr["__type"] == "IPv4Addr", "NetlibEasy.sendIPv4: destAddr must be an IPv4Addr instance, got "..type(destAddr))
             assert(tc.u16(protocol), "NetlibEasy.sendIPv4: protocol must be a 16-bit unsigned integer, got "..type(protocol))
@@ -813,8 +813,8 @@ local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
         --- @param payload string 
         --- @return boolean
         udpSend = function(self, mtu, ttl, dstAddr, srcPort, dstPort, payload)
-            mtu = assert(mtu or self.defaultMTU)
-            ttl = assert(ttl or self.defaultTTL)
+            mtu = mtu or self.defaultMTU
+            ttl = ttl or self.defaultTTL
             
             assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.udpSend: self must be a NetlibEasy instance, got "..type(self))
             assert(type(mtu) == "number", "NetlibEasy.udpSend: mtu must be a number, got "..type(mtu))
