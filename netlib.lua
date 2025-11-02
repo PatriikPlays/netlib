@@ -45,6 +45,14 @@ tc.integer = function(value, minValue, maxValue)
     return type(value) == "number" and value >= minValue and value <= maxValue and math.floor(value) == value
 end
 
+tc.number = function(value, minValue, maxValue)
+    if maxValue then
+        return type(value) == "number" and value >= minValue and value <= maxValue
+    else
+        return type(value) == "number" and value >= minValue
+    end
+end
+
 local netlib = {}
 netlib.struct = {}
 
