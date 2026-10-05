@@ -1,992 +1,749 @@
-local tc = {}
-tc.u8 = function(value)
-    return type(value) == "number" and value >= 0 and value <= 255 and math.floor(value) == value
-end
-
-tc.u16 = function(value)
-    return type(value) == "number" and value >= 0 and value <= 65535 and math.floor(value) == value
-end
-
-tc.u32 = function(value)
-    return type(value) == "number" and value >= 0 and value <= 4294967295 and math.floor(value) == value
-end
-
-tc.i8 = function(value)
-    return type(value) == "number" and value >= -128 and value <= 127 and math.floor(value) == value
-end
-
-tc.i16 = function(value)
-    return type(value) == "number" and value >= -32768 and value <= 32767 and math.floor(value) == value
-end
-
-tc.i32 = function(value)
-    return type(value) == "number" and value >= -2147483648 and value <= 2147483647 and math.floor(value) == value
-end
-
-tc.bool = function(value)
-    return type(value) == "boolean"
-end
-
-tc.string = function(value, minLength, maxLength)
-    if type(value) ~= "string" then return false end
-    
-    if not minLength and not maxLength then
-        return true
-    elseif minLength and not maxLength then
-        return #value >= minLength
-    elseif not minLength and maxLength then
-        return #value <= maxLength
-    else
-        return #value >= minLength and #value <= maxLength
-    end
-end
-
-tc.integer = function(value, minValue, maxValue)
-    return type(value) == "number" and value >= minValue and value <= maxValue and math.floor(value) == value
-end
-
-tc.number = function(value, minValue, maxValue)
-    if maxValue then
-        return type(value) == "number" and value >= minValue and value <= maxValue
-    else
-        return type(value) == "number" and value >= minValue
-    end
-end
-
-local netlib = {}
-netlib.struct = {}
-
---- @enum EtherType
-netlib.EtherType = {
-    IPv4 = 0x0800,
-    ARP  = 0x0806
+local netlib = {
+    AF_INET = 2,
+    SOCK_DGRAM = 2,
+    ETH_P_IP = 0x0800,
+    ETH_P_ARP = 0x0806,
+    IPPROTO_ICMP = 1,
+    IPPROTO_UDP = 17
 }
 
---- @enum IPv4Protocol
-netlib.IPv4Protocol = {
-    UDP = 17
-}
+local BROADCAST_MAC = "\255\255\255\255\255\255"
+local IPV4_BROADCAST = 0xFFFFFFFF
+local function now()
+    if os.epoch then return os.epoch("utc") end
+    return math.floor(os.clock() * 1000)
+end
 
---- @class MACAddr
---- Represents a MAC address with utility methods.
---- @field o1 number The first byte of the MAC address.
---- @field o2 number The second byte of the MAC address.
---- @field o3 number The third byte of the MAC address.
---- @field o4 number The fourth byte of the MAC address.
---- @field o5 number The fifth byte of the MAC address.
---- @field o6 number The sixth byte of the MAC address.
-netlib.struct.MACAddr = {
-    --- Create a MACAddr instance from bytes.
-    --- @param o1 number The first byte of the MAC address.
-    --- @param o2 number The second byte of the MAC address.
-    --- @param o3 number The third byte of the MAC address.
-    --- @param o4 number The fourth byte of the MAC address. 
-    --- @param o5 number The fifth byte of the MAC address.
-    --- @param o6 number The sixth byte of the MAC address.
-    --- @return boolean success Whether the MACAddr instance was successfully created.
-    --- @return MACAddr|string ret The created MACAddr instance. Error message if success is false.
-    new = function(o1,o2,o3,o4,o5,o6)
-        if not tc.u8(o1) or not tc.u8(o2) or not tc.u8(o3) or not tc.u8(o4) or not tc.u8(o5) or not tc.u8(o6) then 
-            return false, "MACAddr.new failed to create MACAddr: all bytes must be numbers between 0 and 255"
-        end
-
-        local t = {
-            o1 = o1,
-            o2 = o2,
-            o3 = o3,
-            o4 = o4,
-            o5 = o5,
-            o6 = o6
-        }
-
-        setmetatable(t, {
-            __index = function(t,k)
-                return rawget(t,k) or netlib.struct.MACAddr[k]
-            end,
-            __tostring = function(t)
-                return string.format("%02x:%02x:%02x:%02x:%02x:%02x", t.o1, t.o2, t.o3, t.o4, t.o5, t.o6)
-            end,
-            __name = "MACAddr"
-        })
-        t["__type"] = "MACAddr"
-
-        return true, t
-    end,
-
-    --- Create a MACAddr instance from a string.
-    --- @param addr string The MAC address string in the format "XX:XX:XX:XX:XX:XX" or "XX-XX-XX-XX-XX-XX".
-    --- @return boolean success Whether the MACAddr instance was successfully created.
-    --- @return MACAddr|string ret The created MACAddr instance. Error message if success is false.
-    fromString = function(addr)
-        local o1, o2, o3, o4, o5, o6 = string.match(addr, "^([0-9a-fA-F][0-9a-fA-F])[:-]([0-9a-fA-F][0-9a-fA-F])[:-]([0-9a-fA-F][0-9a-fA-F])[:-]([0-9a-fA-F][0-9a-fA-F])[:-]([0-9a-fA-F][0-9a-fA-F])[:-]([0-9a-fA-F][0-9a-fA-F])$")
-
-        o1 = tonumber(o1, 16)
-        o2 = tonumber(o2, 16)
-        o3 = tonumber(o3, 16)
-        o4 = tonumber(o4, 16)
-        o5 = tonumber(o5, 16)
-        o6 = tonumber(o6, 16)
-
-        if not tc.u8(o1) or not tc.u8(o2) or not tc.u8(o3) or not tc.u8(o4) or not tc.u8(o5) or not tc.u8(o6) then 
-            return false, "MACAddr.fromString failed to create MACAddr: malformed MAC address string"
-        end
-
-        return netlib.struct.MACAddr.new(o1, o2, o3, o4, o5, o6)
-    end,
-
-    --- Create a MACAddr instance from binary data.
-    --- @param data string A 6-byte binary string representing the MAC address.
-    --- @return boolean success Whether the MACAddr instance was successfully created.
-    --- @return MACAddr|string ret The created MACAddr instance. Error message if success is false.
-    fromBin = function(data)
-        if not tc.string(data, 6) then
-            return false, "MACAddr.fromBin failed to create MACAddr: data must be a string and at least 6 bytes long"
-        end
-
-        return netlib.struct.MACAddr.new(string.unpack(">BBBBBB", data))
-    end,
-
-    --- Convert the MACAddr instance to a string.
-    --- @param self MACAddr
-    --- @return string ret The MAC address in "XX:XX:XX:XX:XX:XX" format.
-    toString = function(self)
-        assert(type(self) == "table" and self["__type"] == "MACAddr")
-        return tostring(self)
-    end,
-
-    --- Convert the MACAddr instance to a binary string.
-    --- @param self MACAddr
-    --- @return string ret A 6-byte binary string representing the MAC address.
-    toBin = function(self)
-        assert(type(self) == "table" and self["__type"] == "MACAddr")
-        return string.pack(">BBBBBB", self.o1, self.o2, self.o3, self.o4, self.o5, self.o6)
-    end,
-
-    --- Check if the MAC address is a group address.
-    --- @param self MACAddr
-    --- @return boolean ret if the address is a group address, false otherwise.
-    isGroup = function(self)
-        assert(type(self) == "table" and self["__type"] == "MACAddr")
-        return bit32.band(self.o1, 0x01) == 0x01
-    end,
-
-    --- Check if the MAC address is locally administered.
-    --- @param self MACAddr
-    --- @return boolean ret if the address is locally administered, false otherwise.
-    isLocallyAdministered = function(self)
-        assert(type(self) == "table" and self["__type"] == "MACAddr")
-        return bit32.band(self.o1, 0x02) == 0x02
-    end,
-
-    --- Check if the MAC address is a broadcast address.
-    --- @param self MACAddr
-    --- @return boolean ret True if the address is a broadcast address, false otherwise.
-    isBroadcast = function(self)
-        assert(type(self) == "table" and self["__type"] == "MACAddr")
-        return self.o1 == 0xFF and self.o2 == 0xFF and self.o3 == 0xFF and self.o4 == 0xFF and self.o5 == 0xFF and self.o6 == 0xFF
+local function parseIPv4(address)
+    if type(address) == "number" and address >= 0 and address <= IPV4_BROADCAST and address == math.floor(address) then
+        return address
     end
-}
+    if type(address) ~= "string" then return nil end
+    local a, b, c, d = address:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+    if not a or a > 255 or b > 255 or c > 255 or d > 255 then return nil end
+    return ((a * 256 + b) * 256 + c) * 256 + d
+end
 
---- @class IPv4Addr
---- Represents an IPv4 address with utility methods.
---- @field o1 number The first byte of the IPv4 address.
---- @field o2 number The second byte of the IPv4 address.
---- @field o3 number The third byte of the IPv4 address.
---- @field o4 number The fourth byte of the IPv4 address.
-netlib.struct.IPv4Addr = {
-    --- Create an IPv4Addr instance from bytes.
-    --- @param o1 number The first byte of the IPv4 address.
-    --- @param o2 number The second byte of the IPv4 address.
-    --- @param o3 number The third byte of the IPv4 address.
-    --- @param o4 number The fourth byte of the IPv4 address. 
-    --- @return boolean success Whether the IPv4Addr instance was successfully created.
-    --- @return IPv4Addr|string ret The created IPv4Addr instance. Error message if success is false.
-    new = function(o1, o2, o3, o4)
-        if not tc.u8(o1) or not tc.u8(o2) or not tc.u8(o3) or not tc.u8(o4) then 
-            return false, "IPv4Addr.new failed to create IPv4Addr: all bytes must be numbers between 0 and 255"
-        end
+local function formatIPv4(address)
+    return string.format("%d.%d.%d.%d", math.floor(address / 16777216) % 256,
+        math.floor(address / 65536) % 256, math.floor(address / 256) % 256, address % 256)
+end
 
-        local t =  {
-            o1 = o1,
-            o2 = o2,
-            o3 = o3,
-            o4 = o4
-        }
+local function parseCIDR(value)
+    if type(value) ~= "string" then return nil, "address must be a string" end
+    local address, prefix = value:match("^([^/]+)/(%d+)$")
+    if not address then address, prefix = value, "32" end
+    local number = parseIPv4(address)
+    prefix = tonumber(prefix)
+    if not number or not prefix or prefix < 0 or prefix > 32 then return nil, "invalid IPv4 prefix: " .. value end
+    return number, prefix
+end
 
-        setmetatable(t, {
-            __index = function(t,k)
-                return rawget(t,k) or netlib.struct.IPv4Addr[k]
-            end,
-            __tostring = function(t)
-                return string.format("%s.%s.%s.%s", t.o1, t.o2, t.o3, t.o4)
-            end,
-        })
-        t["__type"] = "IPv4Addr"
+local function maskFor(prefix)
+    if prefix == 0 then return 0 end
+    return 4294967295 - (2 ^ (32 - prefix)) + 1
+end
 
-        return true, t
-    end,
-
-    --- Create an IPv4Addr instance from a string.
-    --- @param addr string A string representing an IPv4 address in "x.x.x.x" format.
-    --- @return boolean success Whether the IPv4Addr instance was successfully created.
-    --- @return IPv4Addr|string ret The created IPv4Addr instance. Error message if success is false.
-    fromString = function(addr)
-        local o1, o2, o3, o4 = string.match(addr, "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-
-        o1 = tonumber(o1)
-        o2 = tonumber(o2)
-        o3 = tonumber(o3)
-        o4 = tonumber(o4)
-
-        if not tc.u8(o1) or not tc.u8(o2) or not tc.u8(o3) or not tc.u8(o4) then 
-            return false, "IPv4Addr.fromString failed to create IPv4Addr: all bytes must be numbers between 0 and 255"
-        end
-
-        --- @cast o1 number
-        --- @cast o2 number
-        --- @cast o3 number
-        --- @cast o4 number
-        return netlib.struct.IPv4Addr.new(o1, o2, o3, o4)
-    end,
-
-    --- Create an IPv4Addr instance from an integer.
-    --- @param addr number A 32-bit unsigned integer representing an IPv4 address.
-    --- @return boolean success Whether the IPv4Addr instance was successfully created.
-    --- @return IPv4Addr|string ret The created IPv4Addr instance. Error message if success is false.
-    fromInt = function(addr)
-        if not tc.u32(addr) then 
-            return false, "IPv4Addr.fromInt failed to create IPv4Addr: expected a 32-bit unsigned integer"
-        end
-
-        return netlib.struct.IPv4Addr.new(
-            bit32.band(bit32.rshift(addr, 24), 0xFF),
-            bit32.band(bit32.rshift(addr, 16), 0xFF),
-            bit32.band(bit32.rshift(addr, 8), 0xFF),
-            bit32.band(addr, 0xFF)
-        )
-    end,
-
-    --- Create an IPv4Addr instance from a binary string.
-    --- @param data string A 4-byte binary string representing the IPv4 address.
-    --- @return boolean success Whether the IPv4Addr instance was successfully created.
-    --- @return IPv4Addr|string ret The created IPv4Addr instance. Error message if success is false.
-    fromBin = function(data)
-        if not tc.string(data, 4) then
-            return false, "IPv4Addr.fromBin failed to create IPv4Addr: data must be a string and at least 4 bytes long"
-        end
-
-        return netlib.struct.IPv4Addr.new(string.unpack(">BBBB", data))
-    end,
-
-    --- Convert an IPv4Addr instance to an integer.
-    --- @param self IPv4Addr The IPv4Addr instance to convert.
-    --- @return number ret The 32-bit unsigned integer representation of the IPv4 address.
-    toInt = function(self)
-        assert(type(self) == "table" and self["__type"] == "IPv4Addr")
-        return bit32.bor(
-            bit32.lshift(self.o1, 24),
-            bit32.lshift(self.o2, 16),
-            bit32.lshift(self.o3, 8),
-            self.o4
-        )
-    end,
-
-    --- Convert an IPv4Addr instance to a binary string.
-    --- @param self IPv4Addr The IPv4Addr instance to convert.
-    --- @return string ret A 4-byte binary string representing the IPv4 address.
-    toBin = function(self)
-        assert(type(self) == "table" and self["__type"] == "IPv4Addr")
-        return string.pack(">BBBB", self.o1, self.o2, self.o3, self.o4)
-    end,
-
-    --- Convert an IPv4Addr instance to a string.
-    --- @param self IPv4Addr The IPv4Addr instance to convert.
-    --- @return string ret A string representing the IPv4 address in "x.x.x.x" format.
-    toString = function(self)
-        assert(type(self) == "table" and self["__type"] == "IPv4Addr")
-        return tostring(self)
+local function checksum(data)
+    local sum = 0
+    for index = 1, #data, 2 do
+        local high, low = data:byte(index, index + 1)
+        sum = sum + high * 256 + (low or 0)
+        sum = (sum % 65536) + math.floor(sum / 65536)
     end
-}
+    return bit32.band(bit32.bnot(sum), 0xFFFF)
+end
 
--- no FCS, it was annoying and i dont think its necessary, will implement if i decide to hook this up to a tap
---- @class EthernetFrame
---- Represents an ethernet frame with utility methods.
---- @field dst MACAddr The destination MAC address.
---- @field src MACAddr The source MAC address.
---- @field ethertype EtherType The ethertype of the frame.
---- @field data string The data payload of the frame.
-netlib.struct.EthernetFrame = {
-    --- Create an EthernetFrame instance.
-    --- @param dst MACAddr The destination MAC address.
-    --- @param src MACAddr The source MAC address.
-    --- @param ethertype EtherType The ethertype of the frame.
-    --- @param data string The data payload of the frame.
-    --- @return boolean success Whether the EthernetFrame instance was successfully created.
-    --- @return EthernetFrame|string ret The created EthernetFrame instance. Error message if success is false.
-    new = function(dst, src, ethertype, data)
-        if type(dst) ~= "table" or dst["__type"] ~= "MACAddr" then
-            return false, "EthernetFrame.new failed to create EthernetFrame: dst must be a MACAddr instance"
-        end
+local function encodeIPv4(source, destination, protocol, payload, id, ttl, flags, offset)
+    local fragment = flags * 8192 + math.floor(offset / 8)
+    local header = string.pack(">BBHHHBBHI4I4", 0x45, 0, 20 + #payload, id, fragment, ttl, protocol, 0, source, destination)
+    local sum = checksum(header)
+    header = string.pack(">BBHHHBBHI4I4", 0x45, 0, 20 + #payload, id, fragment, ttl, protocol, sum, source, destination)
+    return header .. payload
+end
 
-        if type(src) ~= "table" or src["__type"] ~= "MACAddr" then
-            return false, "EthernetFrame.new failed to create EthernetFrame: src must be a MACAddr instance"
-        end
-
-        if not tc.u16(ethertype) then
-            return false, "EthernetFrame.new failed to create EthernetFrame: ethertype must be a 16-bit unsigned integer"
-        end
-
-        if not tc.string(data) then
-            return false, "EthernetFrame.new failed to create EthernetFrame: data must be a string"
-        end
-
-        local t = {
-            dst = dst,
-            src = src,
-            ethertype = ethertype,
-            data = data
-        }
-
-        setmetatable(t, {
-            __index = function(t,k)
-                return rawget(t,k) or netlib.struct.EthernetFrame[k]
-            end,
-            __name = "EthernetFrame"
-        })
-        t["__type"] = "EthernetFrame"
-
-        return true, t
-    end,
-
-    --- Create an EthernetFrame instance from a binary string.
-    --- @param data string A binary string representing the ethernet frame.
-    --- @return boolean success Whether the EthernetFrame instance was successfully created.
-    --- @return EthernetFrame|string ret The created EthernetFrame instance. Error message if success is false.
-    fromBin = function(data)
-        if #data < 64 then
-            return false, "EthernetFrame.fromBin failed to create EthernetFrame: data must be at least 64 bytes long"
-        end
-
-        local dst = select(2, netlib.struct.MACAddr.fromBin(data:sub(1,6)))
-        local src = select(2, netlib.struct.MACAddr.fromBin(data:sub(7,12)))
-
-        return netlib.struct.EthernetFrame.new(dst, src, string.unpack(">I2", data:sub(13,14)), data:sub(15, -5))
-    end,
-
-    --- Convert an EthernetFrame instance to a binary string.
-    --- @param self EthernetFrame The EthernetFrame instance to convert.
-    --- @return string ret A binary string representing the ethernet frame.
-    toBin = function(self)
-        assert(type(self) == "table" and self["__type"] == "EthernetFrame")
-        return string.pack(">c6c6I2", self.dst:toBin(), self.src:toBin(), self.ethertype)..self.data..("\0"):rep(46-#self.data).."\0\0\0\0"
+local function decodeIPv4(packet)
+    if type(packet) ~= "string" or #packet < 20 then return nil, "short IPv4 packet" end
+    local versionIhl, tos, length, id, fragment, ttl, protocol, headerSum, source, destination =
+        string.unpack(">BBHHHBBHI4I4", packet)
+    local headerLength = (versionIhl % 16) * 4
+    if bit32.rshift(versionIhl, 4) ~= 4 or headerLength ~= 20 or headerLength > #packet then
+        return nil, "invalid IPv4 header"
     end
-}
-
---- @class ARP
---- Represents an ARP packet with utility methods.
---- @field htype number The hardware type of the frame.
---- @field ptype number The protocol type of the frame.
---- @field hlen number The length of the hardware address.
---- @field plen number The length of the protocol address.
---- @field operation number The operation code.
---- @field sha MACAddr The sender hardware address.
---- @field spa IPv4Addr The sender protocol address.
---- @field tha MACAddr The target hardware address.
---- @field tpa IPv4Addr The target protocol address.
-netlib.struct.ARP = {
-    --- Create an ARP instance.
-    --- @param htype number The hardware type of the frame.
-    --- @param ptype number The protocol type of the frame.
-    --- @param hlen number The length of the hardware address.
-    --- @param plen number The length of the protocol address.
-    --- @param operation number The operation code.
-    --- @param sha string|nil The sender hardware address.
-    --- @param spa string|nil The sender protocol address.
-    --- @param tha string|nil The target hardware address.
-    --- @param tpa string|nil The target protocol address.
-    --- @return boolean success Whether the ARP instance was successfully created.
-    --- @return ARP|string ret The created ARP instance. Error message if success is false.
-    new = function(htype, ptype, hlen, plen, operation, sha, spa, tha, tpa)
-        if not tc.u16(htype) then return false, "ARP.new failed to create ARP: htype must be a 16-bit unsigned integer" end
-        if not tc.u16(ptype) then return false, "ARP.new failed to create ARP: ptype must be a 16-bit unsigned integer" end
-        if not tc.u8(hlen) then return false, "ARP.new failed to create ARP: hlen must be a 8-bit unsigned integer" end
-        if not tc.u8(plen) then return false, "ARP.new failed to create ARP: plen must be a 8-bit unsigned integer" end
-        if not tc.u16(operation) then return false, "ARP.new failed to create ARP: operation must be a 16-bit unsigned integer" end
-
-        if not sha then sha = ("\0"):rep(hlen) end
-        if not spa then spa = ("\0"):rep(plen) end
-        if not tha then tha = ("\0"):rep(hlen) end
-        if not tpa then tpa = ("\0"):rep(plen) end
-
-        if not tc.string(sha, hlen, hlen) then return false, "ARP.new failed to create ARP: sha must be a string of length hlen" end
-        if not tc.string(spa, plen, plen) then return false, "ARP.new failed to create ARP: spa must be a string of length plen" end
-        if not tc.string(tha, hlen, hlen) then return false, "ARP.new failed to create ARP: tha must be a string of length hlen" end
-        if not tc.string(tpa, plen, plen) then return false, "ARP.new failed to create ARP: tpa must be a string of length plen" end
-
-        local t = {
-            htype = htype,
-            ptype = ptype,
-            hlen = hlen,
-            plen = plen,
-            operation = operation,
-            sha = sha,
-            spa = spa,
-            tha = tha,
-            tpa = tpa
-        }
-
-        setmetatable(t, {
-            __index = function(t,k)
-                return rawget(t,k) or netlib.struct.ARP[k]
-            end,
-            __name = "ARP"
-        })
-        t["__type"] = "ARP"
-
-        return true, t
-    end,
-
-    --- Convert a binary string to an ARP instance.
-    --- @param data string The binary string to convert.
-    --- @return boolean success Whether the ARP instance was successfully created.
-    --- @return ARP|string ret The created ARP instance. Error message if success is false.
-    fromBin = function(data)
-        if not tc.string(data, 8) then return false, "ARP.fromBin failed to create ARP: data must be a string longer than 8 bytes" end 
-        local htype, ptype, hlen, plen, operation = string.unpack(">I2I2I1I1I2", data)
-        if not tc.string(data, 8+hlen*2+plen*2) then return false, "ARP.fromBin failed to create ARP: data must be a string longer than 8+hlen*2+plen*2 bytes" end
-        local remdata = data:sub(9)
-
-        --- @diagnostic disable-next-line: param-type-mismatch
-        return netlib.struct.ARP.new(htype, ptype, hlen, plen, operation, remdata:sub(1,hlen), remdata:sub(hlen+1,hlen+plen), remdata:sub(hlen+1+plen, hlen*2+plen), remdata:sub(hlen*2+plen+1, hlen*2+plen*2))
-    end,
-
-    --- Convert an ARP instance to a binary string.
-    --- @param self ARP The ARP instance to convert.
-    --- @return string ret The binary string representation of the ARP instance.
-    toBin = function(self)
-        assert(type(self) == "table" and self["__type"] == "ARP")
-        return string.pack(">HHBBH", self.htype, self.ptype, self.hlen, self.plen, self.operation)..self.sha..self.spa..self.tha..self.tpa
-    end
-}
-
--- also no checksum, will implement if i decide to hook this up to a TAP
---- @class IPv4Packet
---- @field tos number The type of service field.
---- @field id number The identification field.
---- @field flags number The flags field.
---- @field fragoff number The fragment offset field.
---- @field ttl number The time to live field.
---- @field proto number The protocol field.
---- @field src IPv4Addr The source IPv4 address.
---- @field dst IPv4Addr The destination IPv4 address.
---- @field data string The data payload of the packet.
-netlib.struct.IPv4Packet = {
-    --- @param tos number The type of service field.
-    --- @param id number The identification field.
-    --- @param flags number The flags field.
-    --- @param fragoff number The fragment offset field.
-    --- @param ttl number The time to live field.
-    --- @param proto number The protocol field.
-    --- @param src IPv4Addr The source IPv4 address.
-    --- @param dst IPv4Addr The destination IPv4 address.
-    --- @param data string The data payload of the packet.
-    --- @return boolean success Whether the IPv4Packet instance was successfully created.
-    --- @return IPv4Packet|string ret The created IPv4Packet instance. Error message if success is false.
-    new = function(tos, id, flags, fragoff, ttl, proto, src, dst, data)
-        if not tc.u8(tos) then return false, "IPv4Packet.new failed to create IPv4Packet: tos must be a 8-bit unsigned integer" end
-        if not tc.u16(id) then return false, "IPv4Packet.new failed to create IPv4Packet: id must be a 16-bit unsigned integer" end
-        if not tc.integer(flags, 0, 7) then return false, "IPv4Packet.new failed to create IPv4Packet: flags must be an unsigned integer between 0 and 7 inclusive" end
-        if not tc.integer(fragoff, 0, 8191) then return false, "IPv4Packet.new failed to create IPv4Packet: fragoff must be an unsigned integer between 0 and 8191 inclusive" end
-        if not tc.u8(ttl) then return false, "IPv4Packet.new failed to create IPv4Packet: ttl must be a 8-bit unsigned integer" end
-        if not tc.u8(proto) then return false, "IPv4Packet.new failed to create IPv4Packet: proto must be a 8-bit unsigned integer" end
-        if type(src) ~= "table" or src["__type"] ~= "IPv4Addr" then return false, "IPv4Packet.new failed to create IPv4Packet: src must be an IPv4Addr instance" end
-        if type(dst) ~= "table" or dst["__type"] ~= "IPv4Addr" then return false, "IPv4Packet.new failed to create IPv4Packet: dst must be an IPv4Addr instance" end
-        if not tc.string(data) then return false, "IPv4Packet.new failed to create IPv4Packet: data must be a string" end
-
-        local t = {
-            tos = tos,
-            id = id,
-            flags = flags,
-            fragoff = fragoff,
-            ttl = ttl,
-            proto = proto,
-            src = src,
-            dst = dst,
-            data = data
-        }
-
-        setmetatable(t, {
-            __index = function(t,k)
-                return rawget(t,k) or netlib.struct.IPv4Packet[k]
-            end,
-            __name = "IPv4Packet"
-        })
-        t["__type"] = "IPv4Packet"
-
-        return true, t
-    end,
-
-    --- Convert a binary string to an IPv4Packet instance.
-    --- @param data string The binary string to convert.
-    --- @return boolean success Whether the IPv4Packet instance was successfully created.
-    --- @return IPv4Packet|string ret The created IPv4Packet instance. Error message if success is false.
-    fromBin = function(data)
-        if not tc.string(data, 20) then return false, "IPv4Packet.fromBin failed to create IPv4Packet: data must be a string with length >= 20 bytes" end
-        local version_ihl, tos, total_len, id, flags_fragoff, ttl, proto, checksum, src, dst, headerEnd = string.unpack(">BBHHHBBHI4I4", data)
-
-        local version = bit32.rshift(version_ihl, 4)
-        if version ~= 4 then return false, "IPv4Packet.fromBin failed to create IPv4Packet: version must be 4" end
-        if not tc.string(data, total_len) then return false, "IPv4Packet.fromBin failed to create IPv4Packet: data must be a string with length >= total_len bytes" end
-
-        local ihl = version_ihl % 16
-
-        if ihl ~= 5 then return false, "IPv4Packet.fromBin failed to create IPv4Packet: ihl must be 5 because someone didnt wanna implement options" end
-        
-        local flags = bit32.rshift(flags_fragoff, 13)
-        local fragoff = flags_fragoff % 8192
-
-        --- @diagnostic disable-next-line: param-type-mismatch
-        local payload = data:sub(headerEnd,headerEnd+total_len-ihl*4-1)
-
-        --- @diagnostic disable-next-line: param-type-mismatch
-        return netlib.struct.IPv4Packet.new(tos, id, flags, fragoff, ttl, proto, select(2, netlib.struct.IPv4Addr.fromInt(src)), select(2, netlib.struct.IPv4Addr.fromInt(dst)), payload)
-    end,
-
-    --- Convert an IPv4Packet instance to a binary string.
-    --- @param self IPv4Packet The IPv4Packet instance to convert.
-    --- @return string ret A binary string representing the IPv4 packet.
-    toBin = function(self)
-        assert(type(self) == "table" and self["__type"] == "IPv4Packet")
-        local header = string.pack(">BBHHHBBHI4I4",0x45,self.tos,20+#self.data,self.id,bit32.bor(bit32.lshift(self.flags, 13), self.fragoff),self.ttl,self.proto,0,self.src:toInt(),self.dst:toInt())
-        return header..self.data
-    end
-}
-
--- also no checksum, will implement if i decide to hook this up to a TAP
---- @class UDPDatagram
---- Represents a UDP datagram with utility methods.
---- @field srcPort number The source port.
---- @field dstPort number The destination port.
---- @field payload string The data payload of the packet.
-netlib.struct.UDPDatagram = {
-    --- Create a new UDPDatagram instance.
-    --- @param srcPort number The source port, 16-bit unsigned integer. 
-    --- @param dstPort number The destination port, 16-bit unsigned integer.
-    --- @param payload string The data payload of the packet. 
-    --- @return boolean success Whether the UDPDatagram instance was successfully created.
-    --- @return UDPDatagram|string ret The created UDPDatagram instance.
-    new = function(srcPort, dstPort, payload)
-        if not tc.u16(srcPort) then return false, "UDPDatagram.new failed to create UDPDatagram: srcPort must be a 16-bit unsigned integer" end
-        if not tc.u16(dstPort) then return false, "UDPDatagram.new failed to create UDPDatagram: dstPort must be a 16-bit unsigned integer" end
-        if not tc.string(payload) then return false, "UDPDatagram.new failed to create UDPDatagram: payload must be a string" end
-
-        local t = {
-            srcPort = srcPort,
-            dstPort = dstPort,
-            payload = payload
-        }
-
-        setmetatable(t, {
-            __index = function(t,k)
-                return rawget(t,k) or netlib.struct.UDPDatagram[k]
-            end,
-            __name = "UDPDatagram"
-        })
-        t["__type"] = "UDPDatagram"
-
-        return true, t
-    end,
-
-    --- Create a UDPDatagram instance from a binary string.
-    --- @param data string The binary string to convert.
-    --- @return boolean success Whether the UDPDatagram instance was successfully created.
-    --- @return UDPDatagram|string ret The created UDPDatagram instance.
-    fromBin = function(data)
-        if not tc.string(data, 8) then return false, "UDPDatagram.fromBin failed to create UDPDatagram: data must be a string with length >= 8 bytes" end
-        local srcPort, dstPort, length, checksum = string.unpack(">I2I2I2I2", data)
-        local payload = data:sub(9, length)
-
-        return netlib.struct.UDPDatagram.new(srcPort, dstPort, payload)
-    end,
-
-    --- Convert a UDPDatagram instance to a binary string.
-    --- @param self UDPDatagram The UDPDatagram instance to convert.
-    --- @return string ret A binary string representing the UDP datagram.
-    toBin = function(self)
-        assert(type(self) == "table" and self["__type"] == "UDPDatagram")
-        return string.pack(">I2I2I2I2", self.srcPort, self.dstPort, 8+#self.payload, 0)..self.payload
-    end
-}
-
---- Initialize a new NetlibEasy instance.
---- @param modem table
---- @param modemChannel number
---- @param MAC MACAddr
---- @param IPv4 IPv4Addr
---- @param defaultMTU number
---- @param defaultTTL number
---- @return NetlibEasy
-local function initEasy(modem, modemChannel, MAC, IPv4, defaultMTU, defaultTTL)
-    modem.open(modemChannel)
-
-    --- @class NetlibEasy
-    --- @field internal table Internal data used by the NetlibEasy instance.
-    --- @field MAC MACAddr The MAC address of the NetlibEasy instance.
-    --- @field IPv4 IPv4Addr The IPv4 address of the NetlibEasy instance.
-    --- @field defaultMTU number The default MTU of the NetlibEasy instance.
-    --- @field defaultTTL number The default TTL of the NetlibEasy instance.
-    --- @field modem table The modem peripheral of the NetlibEasy instance.
-    --- @field modemChannel number The modem channel of the NetlibEasy instance.
-    local easy = {
-        __type = "NetlibEasy",
-
-        modem = modem,
-        modemChannel = modemChannel,
-        MAC = MAC,
-        IPv4 = IPv4,
-        defaultMTU = defaultMTU,
-        defaultTTL = defaultTTL,
-
-        internal = {
-            arpCache = {
-                cacheInvalidateTimeout = 60000, -- ms
-                data = {}
-            },
-            ipv4ReassemblyCache = {
-                reassemblyTimeout = 30000, -- ms
-                data = {}
-            },
-            ipv4IDFields = {
-                cleanupTimeout = 120000, -- ms
-                data = {}
-            },
-            fn = {
-                chunkify = function(str, chunkSize)
-                    local chunks = {}
-                    for i = 1, #str, chunkSize do
-                        table.insert(chunks, str:sub(i, i + chunkSize - 1))
-                    end
-                    return chunks
-                end
-            }
-        },
-
-        --- Resolve an IPv4 address to a MAC address.
-        --- @param self NetlibEasy
-        --- @param addr IPv4Addr The IPv4 address to resolve.
-        --- @param timeout number The timeout in seconds.
-        --- @return MACAddr|nil ret The resolved MAC address, or nil if the resolution failed.
-        ARPResolveIPv4 = function(self, addr, timeout) --TODO: check if we have the ip address?
-            timeout = timeout or 5
-
-            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.ARPResolveIPv4: self must be a NetlibEasy instance, got "..type(self))
-            assert(type(addr) == "table" and addr["__type"] == "IPv4Addr", "NetlibEasy.ARPResolveIPv4: addr must be an IPv4Addr instance, got "..type(addr))
-            assert(tc.number(timeout, 0), "NetlibEasy.ARPResolveIPv4: timeout must be a number greater than 0, got "..type(timeout))
-
-            if self.internal.arpCache.data[addr:toBin()] then
-                local v = self.internal.arpCache.data[addr:toBin()]
-                if v[1]+self.internal.arpCache.cacheInvalidateTimeout > os.epoch("utc") then
-                    local success, ret = netlib.struct.MACAddr.fromBin(v[2])
-                    assert(success, ret)
-
-                    --- @cast ret MACAddr
-                    return ret
-                else
-                    self.internal.arpCache.data[addr:toBin()] = nil
-                end
-            end
-
-            local frame = select(2, netlib.struct.EthernetFrame.new(
-                select(2, netlib.struct.MACAddr.fromBin("\xFF\xFF\xFF\xFF\xFF\xFF")),
-                self.MAC,
-                netlib.EtherType.ARP,
-                select(2, netlib.struct.ARP.new(
-                    1,
-                    netlib.EtherType.IPv4,
-                    6,
-                    4,
-                    1,
-                    self.MAC:toBin()
-                    ,self.IPv4:toBin()
-                    ,nil
-                    ,addr:toBin()
-                )):toBin())
-            ):toBin()
-
-            modem.transmit(self.modemChannel, self.modemChannel, frame)
-
-            local timeoutTimer = os.startTimer(timeout)
-            while true do
-                local ev, a1, a2 = os.pullEvent()
-                if ev == "timer" and a1 == timeoutTimer then
-                    return
-                elseif ev == "netlib_arp_update" and a1 == addr:toBin() and type(a2) == "string" then
-                    --- @cast a2 string
-                    local success, arp = netlib.struct.MACAddr.fromBin(a2)
-                    assert(success, arp)
-                    --- @cast arp MACAddr
-                    return arp
-                end
-            end
-        end,
-
-        --- Send an IPv4 packet.
-        --- @param self NetlibEasy
-        --- @param mtu number The MTU of the packet, defaults to self.defaultMTU.
-        --- @param destAddr IPv4Addr The destination address of the packet.
-        --- @param ttl number|nil The TTL of the packet, defaults to self.defaultTTL.
-        --- @param protocol number The protocol of the packet.
-        --- @param data string The payload of the packet.
-        --- @return boolean ret True if the packet was sent successfully, false otherwise.
-        sendIPv4 = function(self, mtu, destAddr, ttl, protocol, data)
-            mtu = mtu or self.defaultMTU
-            ttl = ttl or self.defaultTTL
-
-            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.sendIPv4: self must be a NetlibEasy instance, got "..type(self))
-            assert(tc.u16(mtu), "NetlibEasy.sendIPv4: mtu must be an integer, got "..type(mtu))
-            assert(tc.u8(ttl), "NetlibEasy.sendIPv4: ttl must be a 8-bit unsigned integer, got "..type(ttl))
-            assert(type(destAddr) == "table" and destAddr["__type"] == "IPv4Addr", "NetlibEasy.sendIPv4: destAddr must be an IPv4Addr instance, got "..type(destAddr))
-            assert(tc.u16(protocol), "NetlibEasy.sendIPv4: protocol must be a 16-bit unsigned integer, got "..type(protocol))
-            assert(type(data) == "string", "NetlibEasy.sendIPv4: data must be a string, got "..type(data))
-
-
-            local destMAC = self:ARPResolveIPv4(destAddr)
-            if not destMAC then
-                return false
-            end
-
-            local ethOverhead = 14
-            local maxIPv4TotalSize = mtu-ethOverhead
-            local maxIPv4ContentSize = maxIPv4TotalSize-20
-
-            local idIndex = destAddr:toBin()..string.pack(">I2",protocol)
-            local ipv4Id = self.internal.ipv4IDFields.data[idIndex] and self.internal.ipv4IDFields.data[idIndex][2] or 0
-            self.internal.ipv4IDFields.data[idIndex] = {os.epoch("utc"), (ipv4Id + 1) % 65536}
-
-            local fragments = self.internal.fn.chunkify(data, math.floor(maxIPv4ContentSize/8)*8)
-            local fragoff = 0
-            for i,frag in ipairs(fragments) do
-                local lastFragment = i==#fragments
-
-                local success, ipv4Packet = netlib.struct.IPv4Packet.new(0,ipv4Id,lastFragment and 0 or 1, fragoff, ttl, protocol, self.IPv4, destAddr, frag)
-                assert(success, ipv4Packet)
-                --- @cast ipv4Packet IPv4Packet
-
-                local success, frame = netlib.struct.EthernetFrame.new(destMAC, self.MAC, netlib.EtherType.IPv4, ipv4Packet:toBin())
-                assert(success, frame)
-                --- @cast frame EthernetFrame
-                
-                modem.transmit(self.modemChannel, self.modemChannel, frame:toBin())
-                fragoff = fragoff + #frag/8
-            end
-
-            return true
-        end,
-
-        --- Receives a UDP datagram.
-        --- comment
-        --- @param self NetlibEasy 
-        --- @param dstPort number 
-        --- @param srcAddr IPv4Addr|nil
-        --- @return UDPDatagram
-        --- @return IPv4Packet
-        udpRecv = function(self, dstPort, srcAddr)
-            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.udpRecv: self must be a NetlibEasy instance, got "..type(self))
-            assert(tc.u16(dstPort), "NetlibEasy.udpRecv: dstPort must be a 16-bit unsigned integer, got "..type(dstPort))
-            assert(type(srcAddr) == "nil" or (type(srcAddr) == "table" and srcAddr["__type"] == "IPv4Addr"), "NetlibEasy.udpRecv: srcAddr must be an IPv4Addr instance, got "..type(srcAddr))
-
-            while true do
-                local _, x = os.pullEvent("netlib_message")
-                if x.ipv4 and x.udp then
-                    local ipv4 = select(2, netlib.struct.IPv4Packet.fromBin(x.ipv4))
-                    local udp = select(2, netlib.struct.UDPDatagram.fromBin(x.udp))
-                    if dstPort == udp.dstPort then
-                        if not srcAddr then
-                            return udp, ipv4
-                        elseif srcAddr:toBin() == ipv4.src:toBin() then
-                            return udp, ipv4
-                        end
-                    end
-                end
-            end
-        end,
-
-        --- Send a UDP datagram.
-        --- @param self NetlibEasy 
-        --- @param mtu number 
-        --- @param ttl number 
-        --- @param dstAddr IPv4Addr 
-        --- @param srcPort number 
-        --- @param dstPort number 
-        --- @param payload string 
-        --- @return boolean
-        udpSend = function(self, mtu, ttl, dstAddr, srcPort, dstPort, payload)
-            mtu = mtu or self.defaultMTU
-            ttl = ttl or self.defaultTTL
-            
-            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.udpSend: self must be a NetlibEasy instance, got "..type(self))
-            assert(type(mtu) == "number", "NetlibEasy.udpSend: mtu must be a number, got "..type(mtu))
-            assert(type(ttl) == "number", "NetlibEasy.udpSend: ttl must be a number, got "..type(ttl))
-            assert(type(dstAddr) == "table" and dstAddr["__type"] == "IPv4Addr", "NetlibEasy.udpSend: dstAddr must be an IPv4Addr instance, got "..type(dstAddr))
-            assert(tc.u16(srcPort), "NetlibEasy.udpSend: srcPort must be a 16-bit unsigned integer, got "..type(srcPort))
-            assert(tc.u16(dstPort), "NetlibEasy.udpSend: dstPort must be a 16-bit unsigned integer, got "..type(dstPort))
-            assert(type(payload) == "string", "NetlibEasy.udpSend: payload must be a string, got "..type(payload))
-
-            local suc, udpdg = netlib.struct.UDPDatagram.new(srcPort, dstPort, payload)
-            assert(suc, udpdg)
-
-            --- @cast udpdg UDPDatagram
-            return self:sendIPv4(mtu, dstAddr, ttl, netlib.IPv4Protocol.UDP, udpdg:toBin())
-        end,
-
-        --- Run the NetlibEasy instance.
-        --- @param self NetlibEasy
-        run = function(self)
-            assert(type(self) == "table" and self["__type"] == "NetlibEasy", "NetlibEasy.run: self must be a NetlibEasy instance, got "..type(self))
-            
-            local function arpHandler(msg)
-                if msg.htype ~= 1 or msg.ptype ~= netlib.EtherType.IPv4 or msg.hlen ~= 6 or msg.plen ~= 4 then return end
-
-                if msg.operation == 1 and msg.tpa == self.IPv4:toBin() then
-                    modem.transmit(self.modemChannel, self.modemChannel, select(2, netlib.struct.EthernetFrame.new(select(2, netlib.struct.MACAddr.fromBin(msg.sha)), self.MAC, netlib.EtherType.ARP, select(2, netlib.struct.ARP.new(1,netlib.EtherType.IPv4,6,4,2,self.MAC:toBin(),self.IPv4:toBin(),msg.sha,msg.spa)):toBin())):toBin())
-                elseif msg.operation == 2 and ((msg.tha == self.MAC:toBin() and msg.tpa == self.IPv4:toBin()) or msg.tha == "\xFF\xFF\xFF\xFF\xFF\xFF") then
-                    self.internal.arpCache.data[msg.spa] = {os.epoch("utc"), msg.sha}
-                    --print("arp update!!!!", netlib.struct.IPv4Addr.fromBin(msg.spa), netlib.struct.MACAddr.fromBin(self.internal.arpCache.data[msg.spa][2]))
-                    os.queueEvent("netlib_arp_update", msg.spa, self.internal.arpCache.data[msg.spa][2])
-                end
-            end
-
-            local function ipv4Handler(msg)
-                -- dont think we need to do anything here?
-            end
-
-            local cacheCleanTimer = os.startTimer(15)
-            local modemName = peripheral.getName(self.modem)
-            while true do
-                local ev, a1, channel, replyChannel, message = os.pullEvent()
-                --if ev == "modem_message" then print(channel, replyChannel, message) end
-                if ev == "modem_message" and channel == self.modemChannel and replyChannel == self.modemChannel and a1 == modemName then -- TODO: pcall
-                    --- @diagnostic disable-next-line: param-type-mismatch
-                    local success, ethernetFrame = netlib.struct.EthernetFrame.fromBin(message)
-                    if success then
-                        if ethernetFrame.dst:toBin() == self.MAC:toBin() or ethernetFrame.dst:toBin() == "\xFF\xFF\xFF\xFF\xFF\xFF" then
-                            local eventMessage = {}
-                            eventMessage["ethernet"] = message
-    
-                            if ethernetFrame.ethertype == netlib.EtherType.ARP then
-                                local success, arpMessage = netlib.struct.ARP.fromBin(ethernetFrame.data)
-
-                                if success then
-                                    arpHandler(arpMessage)
-                                    eventMessage["arp"] = ethernetFrame.data
-                                else
-                                    print("failed to parse arp packet "..tostring(arpMessage))
-                                end
-                            elseif ethernetFrame.ethertype == netlib.EtherType.IPv4 then
-                                local success, ipv4Packet = netlib.struct.IPv4Packet.fromBin(ethernetFrame.data)
-
-                                if success then
-                                    if ipv4Packet.dst:toBin() == self.IPv4:toBin() or ipv4Packet.dst:toBin() == "\255\255\255\255" then
-                                        if bit32.band(ipv4Packet.flags, 1) == 0 and ipv4Packet.fragoff == 0 then -- is last and only fragment
-                                            ipv4Handler(ipv4Packet)
-                                            eventMessage["ipv4"] = ethernetFrame.data
-                                        else
-                                            local cacheIndex = ipv4Packet.src:toBin()..string.pack(">I2I2",ipv4Packet.proto, ipv4Packet.id)
-                                            self.internal.ipv4ReassemblyCache.data[cacheIndex] = self.internal.ipv4ReassemblyCache.data[cacheIndex] or {os.epoch("utc"), {}}
-        
-                                            if self.internal.ipv4ReassemblyCache.data[cacheIndex][1]+self.internal.ipv4ReassemblyCache.reassemblyTimeout > os.epoch("utc") then
-                                                table.insert(self.internal.ipv4ReassemblyCache.data[cacheIndex][2], ipv4Packet)
-        
-                                                table.sort(self.internal.ipv4ReassemblyCache.data[cacheIndex][2], function(a, b)
-                                                    return a.fragoff < b.fragoff
-                                                end)
-        
-                                                local fragments = self.internal.ipv4ReassemblyCache.data[cacheIndex][2]
-                                                local lastEndPos = 0
-                                                local ok = false
-        
-                                                for i, frag in ipairs(fragments) do
-                                                    if frag.fragoff*8 == lastEndPos then
-                                                        if bit32.band(ipv4Packet.flags, 1) == 1 then -- more fragments
-                                                            lastEndPos = lastEndPos + math.floor(#frag.data/8)*8
-                                                        else
-                                                            ok = true
-                                                            break
-                                                        end
-                                                    else
-                                                        ok = false
-                                                        break
-                                                    end
-                                                end
-        
-                                                if ok then
-                                                    local recPayload = ""
-                                                    for _, frag in ipairs(fragments) do
-                                                        recPayload = recPayload..frag.data
-                                                    end
-                                        
-                                                    local lastPacket = fragments[#fragments]
-                                                    self.internal.ipv4ReassemblyCache.data[cacheIndex] = nil
-                                        
-                                                    -- TODO: check if all fragments have same header fields
-                                                    local recPacket = select(2, netlib.struct.IPv4Packet.new(lastPacket.tos,lastPacket.id,lastPacket.flags, 0, lastPacket.ttl, lastPacket.proto, lastPacket.src, lastPacket.dst, recPayload))
-                                                    ipv4Handler(recPacket)
-                                                    eventMessage["ipv4"] = recPacket:toBin()
-                                                end
-                                            else
-                                                self.internal.ipv4ReassemblyCache.data[cacheIndex] = nil
-                                            end
-                                        end
-                                    end
-                                    if eventMessage["ipv4"] then
-                                        local p = select(2, netlib.struct.IPv4Packet.fromBin(eventMessage["ipv4"])) -- peak efficiency
-                                        if p.proto == netlib.IPv4Protocol.UDP then
-                                            local success, udp = netlib.struct.UDPDatagram.fromBin(p.data)
-
-                                            if success then
-                                                eventMessage["udp"] = p.data
-                                            else
-                                                print("failed to parse udp datagram")
-                                            end
-                                        end
-                                    end
-                                else
-                                    print("failed to parse ipv4 packet "..tostring(ipv4Packet))
-                                end
-                            end
-    
-                            os.queueEvent("netlib_message", eventMessage)
-                        end
-                    else
-                        print("failed to parse ethernet frame "..tostring(ethernetFrame))
-                    end
-                elseif ev == "timer" and a1 == cacheCleanTimer then
-                    for k,v in pairs(self.internal.arpCache.data) do
-                        if v[1]+self.internal.arpCache.cacheInvalidateTimeout <= os.epoch("utc") then
-                            self.internal.arpCache.data[k] = nil
-                        end
-                    end
-
-                    for k,v in pairs(self.internal.ipv4ReassemblyCache.data) do
-                        if v[1]+self.internal.ipv4ReassemblyCache.reassemblyTimeout <= os.epoch("utc") then
-                            self.internal.ipv4ReassemblyCache.data[k] = nil
-                        end
-                    end
-
-                    for k,v in pairs(self.internal.ipv4IDFields.data) do
-                        if v[1]+self.internal.ipv4IDFields.cleanupTimeout <= os.epoch("utc") then
-                            self.internal.ipv4IDFields.data[k] = nil
-                        end
-                    end
-
-                    cacheCleanTimer = os.startTimer(10)
-                end
-            end
-        end
+    if length < headerLength or length ~= #packet then return nil, "invalid IPv4 total length" end
+    if checksum(packet:sub(1, headerLength)) ~= 0 then return nil, "invalid IPv4 header checksum" end
+    local flags = bit32.rshift(fragment, 13)
+    local offset = bit32.band(fragment, 0x1FFF) * 8
+    return {
+        source = source, destination = destination, protocol = protocol, ttl = ttl,
+        id = id, flags = flags, offset = offset, more = bit32.band(flags, 1) ~= 0,
+        dontFragment = bit32.band(flags, 2) ~= 0, tos = tos,
+        payload = packet:sub(headerLength + 1, length), raw = packet:sub(1, length)
     }
-
-    return easy
 end
 
-netlib.initEasy = initEasy
+local function encodeEthernet(destination, source, etherType, payload)
+    return string.pack(">c6c6I2", destination, source, etherType) .. payload
+end
+
+local function decodeEthernet(frame)
+    if type(frame) ~= "string" or #frame < 14 then return nil, "short Ethernet frame" end
+    local destination, source, etherType, offset = string.unpack(">c6c6I2", frame)
+    return { destination = destination, source = source, etherType = etherType, payload = frame:sub(offset) }
+end
+
+netlib.ipv4ToString = formatIPv4
+netlib.ipv4ToNumber = parseIPv4
+netlib.parseEthernet = decodeEthernet
+netlib.parseIPv4Packet = decodeIPv4
+
+local Stack = {}
+Stack.__index = Stack
+
+local function macFromString(value)
+    if type(value) ~= "string" then return nil end
+    local octets = { value:match("^(%x%x):(%x%x):(%x%x):(%x%x):(%x%x):(%x%x)$") }
+    if #octets ~= 6 then return nil end
+    for index = 1, 6 do octets[index] = tonumber(octets[index], 16) end
+    return string.char(unpack(octets))
+end
+
+local function randomMAC()
+    return string.char(bit32.bor(bit32.band(math.random(0, 255), 0xFE), 2), math.random(0, 255),
+        math.random(0, 255), math.random(0, 255), math.random(0, 255), math.random(0, 255))
+end
+
+function netlib.new(config)
+    config = config or {}
+    local stack = setmetatable({
+        interfaces = {}, interfaceOrder = {}, routes = {}, sockets = {}, nextSocketId = 0,
+        nextEphemeralPort = 49152, forwarding = config.forwarding == true,
+        arpTimeout = 60000, arpWaitTimeout = 3000, reassemblyTimeout = 30000,
+        reassembly = {}, forwardPending = {}, protocolHandlers = {}, pendingPings = {},
+        icmpIdentifier = math.random(0, 65535), icmpSequence = 0, running = false, config = config
+    }, Stack)
+
+    for name, definition in pairs(config.interfaces or {}) do
+        local modem = definition.modem
+        local modemName = definition.peripheral or (type(modem) == "string" and modem)
+        if not modem and modemName and peripheral then modem = peripheral.wrap(modemName) end
+        if not modem then error("configured modem is unavailable for interface " .. tostring(name), 2) end
+        if modem then
+            local ok, err = stack:addInterface(name, modem, {
+                peripheral = modemName, channel = definition.channel, mac = definition.mac,
+                mtu = definition.mtu, up = definition.up, addresses = definition.addresses
+            })
+            if not ok then error(err, 2) end
+        end
+    end
+    for _, route in ipairs(config.routes or {}) do
+        local ok, err = stack:addRoute(route.destination, route.dev, route.gateway, route.metric)
+        if not ok then error(err, 2) end
+    end
+    return stack
+end
+
+function Stack:addInterface(name, modem, options)
+    options = options or {}
+    if type(name) ~= "string" or name == "" or self.interfaces[name] then return nil, "invalid or duplicate interface name" end
+    if type(modem) ~= "table" then return nil, "modem peripheral required" end
+    local mac
+    if options.mac then mac = macFromString(options.mac) else mac = randomMAC() end
+    if not mac then return nil, "invalid interface MAC address" end
+    if bit32.band(mac:byte(1), 1) ~= 0 then return nil, "interface MAC address must be unicast" end
+    local interface = {
+        name = name, modem = modem, peripheral = options.peripheral or name,
+        channel = options.channel or 6942, mac = mac, mtu = options.mtu or 1500,
+        up = options.up ~= false, addresses = {}, arp = {}
+    }
+    if type(interface.channel) ~= "number" or interface.channel < 0 or interface.channel > 65535 or interface.channel ~= math.floor(interface.channel) then return nil, "invalid modem channel" end
+    if type(interface.mtu) ~= "number" or interface.mtu < 68 or interface.mtu > 65535 or interface.mtu ~= math.floor(interface.mtu) then return nil, "MTU must be an integer between 68 and 65535" end
+    self.interfaces[name] = interface
+    self.interfaceOrder[#self.interfaceOrder + 1] = name
+    for _, cidr in ipairs(options.addresses or {}) do
+        local ok, err = self:addAddress(name, cidr)
+        if not ok then
+            self.interfaces[name] = nil
+            table.remove(self.interfaceOrder)
+            return nil, err
+        end
+    end
+    if self.running and interface.up then modem.open(interface.channel) end
+    return true
+end
+
+function Stack:setLink(name, up)
+    local interface = self.interfaces[name]
+    if not interface then return nil, "unknown interface: " .. tostring(name) end
+    interface.up = up == true
+    if interface.up then interface.modem.open(interface.channel) else interface.modem.close(interface.channel) end
+    return true
+end
+
+function Stack:addAddress(name, cidr)
+    local interface = self.interfaces[name]
+    if not interface then return nil, "unknown interface: " .. tostring(name) end
+    local address, prefix = parseCIDR(cidr)
+    if not address then return nil, prefix end
+    for _, entry in ipairs(interface.addresses) do
+        if entry.address == address and entry.prefix == prefix then return nil, "address already configured" end
+    end
+    interface.addresses[#interface.addresses + 1] = { address = address, prefix = prefix }
+    return true
+end
+
+function Stack:deleteAddress(name, cidr)
+    local interface = self.interfaces[name]
+    if not interface then return nil, "unknown interface: " .. tostring(name) end
+    local address, prefix = parseCIDR(cidr)
+    if not address then return nil, prefix end
+    for index, entry in ipairs(interface.addresses) do
+        if entry.address == address and entry.prefix == prefix then table.remove(interface.addresses, index); return true end
+    end
+    return nil, "address not configured"
+end
+
+function Stack:addRoute(destination, dev, gateway, metric)
+    local network, prefix = parseCIDR(destination)
+    if not network then return nil, prefix end
+    if not self.interfaces[dev] then return nil, "unknown interface: " .. tostring(dev) end
+    local nextHop = gateway and parseIPv4(gateway) or nil
+    if gateway and not nextHop then return nil, "invalid gateway address" end
+    metric = metric or 0
+    if type(metric) ~= "number" or metric < 0 or metric ~= math.floor(metric) then return nil, "metric must be a non-negative integer" end
+    network = bit32.band(network, maskFor(prefix))
+    self.routes[#self.routes + 1] = { destination = network, prefix = prefix, dev = dev, gateway = nextHop, metric = metric }
+    return true
+end
+
+function Stack:deleteRoute(destination, dev, gateway)
+    local network, prefix = parseCIDR(destination)
+    if not network then return nil, prefix end
+    network = bit32.band(network, maskFor(prefix))
+    local nextHop = gateway and parseIPv4(gateway) or nil
+    for index, route in ipairs(self.routes) do
+        if route.destination == network and route.prefix == prefix and route.dev == dev and route.gateway == nextHop then
+            table.remove(self.routes, index)
+            return true
+        end
+    end
+    return nil, "route not found"
+end
+
+function Stack:registerProtocol(protocol, handler)
+    if type(protocol) ~= "number" or protocol < 0 or protocol > 255 or protocol ~= math.floor(protocol) then
+        return nil, "protocol must be an 8-bit unsigned integer"
+    end
+    if type(handler) ~= "function" then return nil, "handler must be a function" end
+    self.protocolHandlers[protocol] = handler
+    return true
+end
+
+function Stack:lookupRoute(destination)
+    destination = parseIPv4(destination)
+    if not destination then return nil, "invalid destination address" end
+    local best
+    local function consider(route)
+        local interface = self.interfaces[route.dev]
+        if interface and interface.up and bit32.band(destination, maskFor(route.prefix)) == route.destination then
+            if not best or route.prefix > best.prefix or
+                (route.prefix == best.prefix and route.metric < best.metric) then best = route end
+        end
+    end
+    for _, route in ipairs(self.routes) do consider(route) end
+    for _, name in ipairs(self.interfaceOrder) do
+        local interface = self.interfaces[name]
+        for _, address in ipairs(interface.addresses) do
+            consider({ destination = bit32.band(address.address, maskFor(address.prefix)), prefix = address.prefix,
+                dev = name, gateway = nil, metric = 0, connected = true })
+        end
+    end
+    if best then return best end
+    return nil, "network is unreachable"
+end
+
+local function addressOnInterface(interface, address)
+    for _, entry in ipairs(interface.addresses) do
+        if entry.address == address then return true end
+    end
+    return false
+end
+
+local function isBroadcast(interface, address)
+    if address == IPV4_BROADCAST then return true end
+    for _, entry in ipairs(interface.addresses) do
+        if entry.prefix < 31 then
+            local mask = maskFor(entry.prefix)
+            local subnetBroadcast = bit32.bor(bit32.band(entry.address, mask), bit32.band(bit32.bnot(mask), IPV4_BROADCAST))
+            if address == subnetBroadcast then return true end
+        end
+    end
+    return false
+end
+
+function Stack:_sendFrame(interface, destinationMAC, etherType, payload)
+    if not interface.up then return nil, "interface is down" end
+    interface.modem.transmit(interface.channel, interface.channel,
+        encodeEthernet(destinationMAC, interface.mac, etherType, payload))
+    return true
+end
+
+function Stack:_sendARPRequest(interface, target)
+    local source = interface.addresses[1] and interface.addresses[1].address or 0
+    local arp = string.pack(">HHBBHc6I4c6I4", 1, netlib.ETH_P_IP, 6, 4, 1, interface.mac, source, "\0\0\0\0\0\0", target)
+    return self:_sendFrame(interface, BROADCAST_MAC, netlib.ETH_P_ARP, arp)
+end
+
+function Stack:_resolve(interface, address)
+    local cached = interface.arp[address]
+    if cached and cached.time + self.arpTimeout > now() then return cached.mac end
+    interface.arp[address] = nil
+    local key = interface.name .. ":" .. address
+    self.arpPending = self.arpPending or {}
+    if not self.arpPending[key] then
+        self.arpPending[key] = true
+        self:_sendARPRequest(interface, address)
+    end
+    local timer = os.startTimer(self.arpWaitTimeout / 1000)
+    while true do
+        local event, eventKey = os.pullEvent()
+        if event == "netlib_arp" and eventKey == key then
+            self.arpPending[key] = nil
+            return interface.arp[address] and interface.arp[address].mac
+        elseif event == "timer" and eventKey == timer then
+            self.arpPending[key] = nil
+            return nil, "ARP resolution timed out"
+        end
+    end
+end
+
+function Stack:_emitIP(interface, destinationMAC, parsed)
+    if 20 + #parsed.payload <= interface.mtu then
+        local bytes = encodeIPv4(parsed.source, parsed.destination, parsed.protocol, parsed.payload,
+            parsed.id, parsed.ttl, parsed.flags, parsed.offset)
+        return self:_sendFrame(interface, destinationMAC, netlib.ETH_P_IP, bytes)
+    end
+    if parsed.dontFragment then return nil, "packet exceeds MTU and fragmentation is disabled" end
+    local fragmentSize = math.floor((interface.mtu - 20) / 8) * 8
+    if fragmentSize < 8 then return nil, "MTU too small for IPv4 fragmentation" end
+    local start = 1
+    while start <= #parsed.payload do
+        local finish = math.min(start + fragmentSize - 1, #parsed.payload)
+        local final = finish == #parsed.payload
+        local flags = bit32.band(parsed.flags, 4)
+        if not final or parsed.more then flags = bit32.bor(flags, 1) end
+        local fragment = encodeIPv4(parsed.source, parsed.destination, parsed.protocol,
+            parsed.payload:sub(start, finish), parsed.id, parsed.ttl, flags, parsed.offset + start - 1)
+        local ok, err = self:_sendFrame(interface, destinationMAC, netlib.ETH_P_IP, fragment)
+        if not ok then return nil, err end
+        start = finish + 1
+    end
+    return true
+end
+
+function Stack:sendIPv4(destination, protocol, payload, source, ttl)
+    destination, source = parseIPv4(destination), parseIPv4(source)
+    if not destination or not source then return nil, "invalid IPv4 address" end
+    if type(protocol) ~= "number" or protocol < 0 or protocol > 255 or protocol ~= math.floor(protocol) then return nil, "invalid IP protocol" end
+    if type(payload) ~= "string" then return nil, "payload must be a string" end
+    local route, err = self:lookupRoute(destination)
+    if not route then return nil, err end
+    local interface = self.interfaces[route.dev]
+    local destinationMAC
+    if isBroadcast(interface, destination) then destinationMAC = BROADCAST_MAC else
+        destinationMAC, err = self:_resolve(interface, route.gateway or destination)
+    end
+    if not destinationMAC then return nil, err end
+    self.ipId = ((self.ipId or 0) + 1) % 65536
+    return self:_emitIP(interface, destinationMAC, {
+        source = source, destination = destination, protocol = protocol, payload = payload,
+        id = self.ipId, ttl = ttl or 64, flags = 0, offset = 0, more = false, dontFragment = false
+    })
+end
+
+function Stack:_deliverUDP(packet)
+    if #packet.payload < 8 then return end
+    local sourcePort, destinationPort, length, udpChecksum = string.unpack(">I2I2I2I2", packet.payload)
+    if length < 8 or length ~= #packet.payload then return end
+    if udpChecksum ~= 0 then
+        local pseudoHeader = string.pack(">I4I4BBI2", packet.source, packet.destination, 0, netlib.IPPROTO_UDP, length)
+        if checksum(pseudoHeader .. packet.payload) ~= 0 then return end
+    end
+    local payload = packet.payload:sub(9, length)
+    for _, socket in pairs(self.sockets) do
+        if not socket.closed and socket.port == destinationPort and #socket.queue < socket.queueLimit and
+            (socket.address == 0 or socket.address == packet.destination) then
+            socket.queue[#socket.queue + 1] = { payload, packet.source, sourcePort }
+            os.queueEvent("netlib_socket", socket.id)
+        end
+    end
+end
+
+function Stack:_reassemble(interface, packet)
+    if packet.offset == 0 and not packet.more then return packet end
+    if packet.dontFragment then return nil end
+    local key = interface.name .. ":" .. packet.source .. ":" .. packet.destination .. ":" .. packet.protocol .. ":" .. packet.id
+    local entry = self.reassembly[key]
+    if not entry then
+        local count = 0
+        for _ in pairs(self.reassembly) do count = count + 1 end
+        if count >= 32 then return nil end
+        entry = { parts = {}, bytes = 0, expires = now() + self.reassemblyTimeout, header = packet }
+        self.reassembly[key] = entry
+    end
+    local first, last = packet.offset, packet.offset + #packet.payload
+    if last > 65515 or #packet.payload == 0 or (packet.more and #packet.payload % 8 ~= 0) or
+        (entry.total and last > entry.total) or (not packet.more and entry.total and entry.total ~= last) then
+        self.reassembly[key] = nil
+        return nil
+    end
+    for offset, data in pairs(entry.parts) do
+        if first < offset + #data and offset < last then self.reassembly[key] = nil; return nil end
+    end
+    entry.parts[first] = packet.payload
+    entry.bytes = entry.bytes + #packet.payload
+    if not packet.more then entry.total = last end
+    if not entry.total or entry.bytes ~= entry.total then return nil end
+    local offsets = {}
+    for offset in pairs(entry.parts) do offsets[#offsets + 1] = offset end
+    table.sort(offsets)
+    local expected, payload = 0, {}
+    for _, offset in ipairs(offsets) do
+        if offset ~= expected then return nil end
+        local part = entry.parts[offset]
+        payload[#payload + 1] = part
+        expected = expected + #part
+    end
+    if expected ~= entry.total then return nil end
+    self.reassembly[key] = nil
+    local complete = entry.header
+    complete.offset, complete.more, complete.flags = 0, false, 0
+    complete.payload = table.concat(payload)
+    return complete
+end
+
+function Stack:_forward(interface, packet)
+    if not self.forwarding or packet.ttl <= 1 then return end
+    local route = self:lookupRoute(packet.destination)
+    if not route then return end
+    local outgoing = self.interfaces[route.dev]
+    local nextHop = route.gateway or packet.destination
+    local cached = outgoing.arp[nextHop]
+    if not cached or cached.time + self.arpTimeout <= now() then
+        outgoing.arp[nextHop] = nil
+        local key = outgoing.name .. ":" .. nextHop
+        local pendingCount = 0
+        local pendingKeys = 0
+        for _, waiting in pairs(self.forwardPending) do
+            pendingCount = pendingCount + #waiting
+            pendingKeys = pendingKeys + 1
+        end
+        local waiting = self.forwardPending[key]
+        if pendingCount >= 128 or (not waiting and pendingKeys >= 64) then return end
+        if not waiting then
+            waiting = {}
+            self.forwardPending[key] = waiting
+            self:_sendARPRequest(outgoing, nextHop)
+        end
+        if #waiting < 16 then waiting[#waiting + 1] = { packet = packet, expires = now() + 10000 } end
+        return
+    end
+    packet.ttl = packet.ttl - 1
+    self:_emitIP(outgoing, cached.mac, packet)
+end
+
+function Stack:_handleARP(interface, frame)
+    if #frame.payload < 28 then return end
+    local hardware, protocol, hardwareLength, protocolLength, operation, sourceMAC, sourceIP, targetMAC, targetIP =
+        string.unpack(">HHBBHc6I4c6I4", frame.payload)
+    if hardware ~= 1 or protocol ~= netlib.ETH_P_IP or hardwareLength ~= 6 or protocolLength ~= 4 then return end
+    if operation == 1 then
+        for _, address in ipairs(interface.addresses) do
+            if address.address == targetIP then
+                local reply = string.pack(">HHBBHc6I4c6I4", 1, netlib.ETH_P_IP, 6, 4, 2,
+                    interface.mac, targetIP, sourceMAC, sourceIP)
+                self:_sendFrame(interface, sourceMAC, netlib.ETH_P_ARP, reply)
+                return
+            end
+        end
+    elseif operation == 2 and targetMAC == interface.mac and addressOnInterface(interface, targetIP) and frame.source == sourceMAC then
+        interface.arp[sourceIP] = { mac = sourceMAC, time = now() }
+        local key = interface.name .. ":" .. sourceIP
+        os.queueEvent("netlib_arp", key, sourceMAC)
+        local waiting = self.forwardPending[key]
+        if waiting then
+            self.forwardPending[key] = nil
+            for _, item in ipairs(waiting) do self:_forward(interface, item.packet) end
+        end
+    end
+end
+
+function Stack:_handleFrame(interface, message)
+    local frame = decodeEthernet(message)
+    if not frame then return end
+    if frame.destination ~= interface.mac and frame.destination ~= BROADCAST_MAC and bit32.band(frame.destination:byte(1), 1) == 0 then return end
+    if frame.etherType == netlib.ETH_P_ARP then self:_handleARP(interface, frame); return end
+    if frame.etherType ~= netlib.ETH_P_IP then return end
+    local packet = decodeIPv4(frame.payload)
+    if not packet then return end
+    local localDestination = packet.destination == IPV4_BROADCAST
+    for _, name in ipairs(self.interfaceOrder) do
+        local interface = self.interfaces[name]
+        if addressOnInterface(interface, packet.destination) or isBroadcast(interface, packet.destination) then
+            localDestination = true
+            break
+        end
+    end
+    if not localDestination then self:_forward(interface, packet); return end
+    packet = self:_reassemble(interface, packet)
+    if packet then
+        if packet.protocol == netlib.IPPROTO_UDP then self:_deliverUDP(packet)
+        elseif packet.protocol == netlib.IPPROTO_ICMP then self:_handleICMP(interface, frame.source, packet)
+        elseif self.protocolHandlers[packet.protocol] then self.protocolHandlers[packet.protocol](self, interface, packet) end
+    end
+end
+
+function Stack:_handleICMP(interface, sourceMAC, packet)
+    if #packet.payload < 8 or checksum(packet.payload) ~= 0 then return end
+    local kind, code, _, identifier, sequence = string.unpack(">BBI2I2I2", packet.payload)
+    if code ~= 0 then return end
+    if kind == 8 then
+        if packet.destination == IPV4_BROADCAST or isBroadcast(interface, packet.destination) then return end
+        local reply = string.pack(">BBI2I2I2", 0, 0, 0, identifier, sequence) .. packet.payload:sub(9)
+        reply = string.pack(">BBI2I2I2", 0, 0, checksum(reply), identifier, sequence) .. packet.payload:sub(9)
+        self.ipId = ((self.ipId or 0) + 1) % 65536
+        local response = encodeIPv4(packet.destination, packet.source, netlib.IPPROTO_ICMP,
+            reply, self.ipId, 64, 0, 0)
+        self:_sendFrame(interface, sourceMAC, netlib.ETH_P_IP, response)
+    elseif kind == 0 then
+        local key = packet.source .. ":" .. identifier .. ":" .. sequence
+        local pending = self.pendingPings[key]
+        if pending then
+            pending.received = now()
+            os.queueEvent("netlib_ping", key)
+        end
+    end
+end
+
+function Stack:ping(destination, timeout)
+    local destinationNumber = parseIPv4(destination)
+    if not destinationNumber then return nil, "invalid IPv4 destination" end
+    timeout = timeout or 2
+    if type(timeout) ~= "number" or timeout < 0 then return nil, "timeout must be a non-negative number" end
+    local route, err = self:lookupRoute(destinationNumber)
+    if not route then return nil, err end
+    local source
+    for _, address in ipairs(self.interfaces[route.dev].addresses) do source = address.address; break end
+    if not source then return nil, "selected interface has no IPv4 address" end
+    self.icmpSequence = (self.icmpSequence + 1) % 65536
+    local identifier, sequence = self.icmpIdentifier, self.icmpSequence
+    local key = destinationNumber .. ":" .. identifier .. ":" .. sequence
+    local request = string.pack(">BBI2I2I2", 8, 0, 0, identifier, sequence) .. "netlib-ping"
+    request = string.pack(">BBI2I2I2", 8, 0, checksum(request), identifier, sequence) .. "netlib-ping"
+    self.pendingPings[key] = { sent = now() }
+    local sent, sendError = self:sendIPv4(destinationNumber, netlib.IPPROTO_ICMP, request, source, 64)
+    if not sent then self.pendingPings[key] = nil; return nil, sendError end
+    if timeout == 0 then self.pendingPings[key] = nil; return nil, "timeout" end
+    local timer = os.startTimer(timeout)
+    while true do
+        local event, eventKey = os.pullEvent()
+        if event == "netlib_ping" and eventKey == key then
+            local received = self.pendingPings[key]
+            self.pendingPings[key] = nil
+            if received then return received.received - received.sent end
+        elseif event == "timer" and eventKey == timer then
+            self.pendingPings[key] = nil
+            return nil, "timeout"
+        end
+    end
+end
+
+function Stack:_cleanup(current)
+    for _, interface in pairs(self.interfaces) do
+        for address, item in pairs(interface.arp) do
+            if item.time + self.arpTimeout <= current then interface.arp[address] = nil end
+        end
+    end
+    for key, entry in pairs(self.reassembly) do
+        if entry.expires <= current then self.reassembly[key] = nil end
+    end
+    for key, waiting in pairs(self.forwardPending) do
+        for index = #waiting, 1, -1 do
+            if waiting[index].expires <= current then table.remove(waiting, index) end
+        end
+        if #waiting == 0 then self.forwardPending[key] = nil end
+    end
+end
+
+function Stack:run()
+    if self.running then return nil, "network stack is already running" end
+    self.running = true
+    for _, name in ipairs(self.interfaceOrder) do
+        local interface = self.interfaces[name]
+        if interface.up then interface.modem.open(interface.channel) end
+    end
+    local cleanup = os.startTimer(10)
+    while true do
+        local event, side, channel, replyChannel, message = os.pullEventRaw()
+        if event == "modem_message" then
+            for _, name in ipairs(self.interfaceOrder) do
+                local interface = self.interfaces[name]
+                if interface.up and side == interface.peripheral and channel == interface.channel and replyChannel == interface.channel then
+                    self:_handleFrame(interface, message)
+                    break
+                end
+            end
+        elseif event == "timer" and side == cleanup then
+            self:_cleanup(now())
+            cleanup = os.startTimer(10)
+        end
+    end
+end
+
+function Stack:socket(domain, socketType, protocol)
+    if domain ~= netlib.AF_INET or socketType ~= netlib.SOCK_DGRAM or (protocol and protocol ~= 0 and protocol ~= netlib.IPPROTO_UDP) then
+        return nil, "only AF_INET/SOCK_DGRAM sockets are supported"
+    end
+    self.nextSocketId = self.nextSocketId + 1
+    local socket = { stack = self, id = self.nextSocketId, queue = {}, queueLimit = 64, address = 0, port = nil, closed = false }
+    function socket:bind(address, port)
+        if self.closed then return nil, "socket is closed" end
+        local parsed
+        if address == nil or address == "0.0.0.0" then parsed = 0 else parsed = parseIPv4(address) end
+        if not parsed then return nil, "invalid bind address" end
+        if parsed ~= 0 then
+            local isLocal = false
+            for _, name in ipairs(self.stack.interfaceOrder) do
+                if addressOnInterface(self.stack.interfaces[name], parsed) then isLocal = true; break end
+            end
+            if not isLocal then return nil, "cannot bind to an address not assigned to this host" end
+        end
+        if port == nil or port == 0 then
+            for _ = 1, 16384 do
+                local candidate = self.stack.nextEphemeralPort
+                self.stack.nextEphemeralPort = candidate >= 65535 and 49152 or candidate + 1
+                local used = false
+                for _, other in pairs(self.stack.sockets) do if other ~= self and other.port == candidate then used = true end end
+                if not used then port = candidate; break end
+            end
+        end
+        if type(port) ~= "number" or port < 1 or port > 65535 or port ~= math.floor(port) then return nil, "invalid port" end
+        for _, other in pairs(self.stack.sockets) do
+            if other ~= self and not other.closed and other.port == port and (other.address == 0 or parsed == 0 or other.address == parsed) then
+                return nil, "address already in use"
+            end
+        end
+        self.address, self.port = parsed, port
+        self.stack.sockets[self.id] = self
+        return true
+    end
+    function socket:sendto(payload, destination, port)
+        if self.closed or not self.port then return nil, "socket is not bound" end
+        if type(payload) ~= "string" then return nil, "payload must be a string" end
+        destination = parseIPv4(destination)
+        if not destination or type(port) ~= "number" or port < 1 or port > 65535 or port ~= math.floor(port) then
+            return nil, "invalid destination or port"
+        end
+        if #payload > 65507 then return nil, "UDP payload exceeds IPv4 limit" end
+        local route, err = self.stack:lookupRoute(destination)
+        if not route then return nil, err end
+        local interface = self.stack.interfaces[route.dev]
+        local source = self.address
+        if source == 0 then
+            for _, address in ipairs(interface.addresses) do source = address.address; break end
+        end
+        if not source then return nil, "interface has no IPv4 address" end
+        local mac
+        if isBroadcast(interface, destination) then mac = BROADCAST_MAC else
+            mac, err = self.stack:_resolve(interface, route.gateway or destination)
+        end
+        if not mac then return nil, err end
+        local udp = string.pack(">I2I2I2I2", self.port, port, #payload + 8, 0) .. payload
+        self.stack.ipId = ((self.stack.ipId or 0) + 1) % 65536
+        local ok, sendError = self.stack:_emitIP(interface, mac, {
+            source = source, destination = destination, protocol = netlib.IPPROTO_UDP, payload = udp,
+            id = self.stack.ipId, ttl = 64, flags = 0, offset = 0, more = false, dontFragment = false
+        })
+        if not ok then return nil, sendError end
+        return #payload
+    end
+    function socket:recvfrom(timeout)
+        if self.closed then return nil, "socket is closed" end
+        if not self.port then return nil, "socket is not bound" end
+        if timeout ~= nil and (type(timeout) ~= "number" or timeout < 0) then return nil, "invalid timeout" end
+        local timer = timeout and timeout > 0 and os.startTimer(timeout)
+        while true do
+            if #self.queue > 0 then
+                local item = table.remove(self.queue, 1)
+                return item[1], formatIPv4(item[2]), item[3]
+            end
+            if timeout == 0 then return nil, "timeout" end
+            local event, id = os.pullEvent()
+            if event == "timer" and timer and id == timer then return nil, "timeout" end
+        end
+    end
+    function socket:close()
+        if self.closed then return true end
+        self.closed = true
+        self.stack.sockets[self.id] = nil
+        self.queue = {}
+        os.queueEvent("netlib_socket", self.id)
+        return true
+    end
+    return socket
+end
+
+function Stack:interfaceList()
+    local result = {}
+    for _, name in ipairs(self.interfaceOrder) do
+        local interface = self.interfaces[name]
+        result[#result + 1] = { name = name, peripheral = interface.peripheral, channel = interface.channel,
+            mac = string.format("%02x:%02x:%02x:%02x:%02x:%02x", interface.mac:byte(1, 6)), mtu = interface.mtu,
+            up = interface.up, addresses = interface.addresses }
+    end
+    return result
+end
+
+function Stack:routeList()
+    local result = {}
+    for _, route in ipairs(self.routes) do result[#result + 1] = route end
+    for _, name in ipairs(self.interfaceOrder) do
+        local interface = self.interfaces[name]
+        for _, address in ipairs(interface.addresses) do
+            result[#result + 1] = { destination = bit32.band(address.address, maskFor(address.prefix)),
+                prefix = address.prefix, dev = name, metric = 0, connected = true }
+        end
+    end
+    return result
+end
+
+function Stack:configData()
+    local result = { forwarding = self.forwarding, interfaces = {}, routes = {} }
+    for _, name in ipairs(self.interfaceOrder) do
+        local interface = self.interfaces[name]
+        local addresses = {}
+        for _, address in ipairs(interface.addresses) do
+            addresses[#addresses + 1] = formatIPv4(address.address) .. "/" .. address.prefix
+        end
+        result.interfaces[name] = { peripheral = interface.peripheral, channel = interface.channel,
+            mac = string.format("%02x:%02x:%02x:%02x:%02x:%02x", interface.mac:byte(1, 6)),
+            mtu = interface.mtu, up = interface.up, addresses = addresses }
+    end
+    for _, route in ipairs(self.routes) do
+        result.routes[#result.routes + 1] = { destination = formatIPv4(route.destination) .. "/" .. route.prefix,
+            dev = route.dev, gateway = route.gateway and formatIPv4(route.gateway) or nil, metric = route.metric }
+    end
+    return result
+end
+
+function Stack:saveConfig(path)
+    if not fs or not textutils then return nil, "configuration persistence requires ComputerCraft fs/textutils" end
+    local handle = fs.open(path or "/netlib/config/easyconfig.lua", "w")
+    if not handle then return nil, "could not open configuration file" end
+    handle.write("return " .. textutils.serialise(self:configData()))
+    handle.close()
+    return true
+end
+
 return netlib

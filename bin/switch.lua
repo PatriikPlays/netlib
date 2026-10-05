@@ -43,22 +43,24 @@ parallel.waitForAll(
       local _, side, channel, replyChannel, message = os.pullEvent("modem_message")
       if channel == MODEM_CHANNEL and replyChannel == MODEM_CHANNEL then
         local s,e = pcall(function()
-          local success, ethernetFrame = netlib.struct.EthernetFrame.fromBin(message)
-          if success then
-            if not ethernetFrame.src:isBroadcast() and not ethernetFrame.src:isGroup() then
-              if ethernetFrame.dst:isBroadcast() or ethernetFrame.dst:isGroup() then
+          local ethernetFrame = netlib.parseEthernet(message)
+          if ethernetFrame then
+            local sourceGroup = bit32.band(ethernetFrame.source:byte(1), 1) ~= 0
+            local destinationGroup = bit32.band(ethernetFrame.destination:byte(1), 1) ~= 0
+            if not sourceGroup then
+              if destinationGroup then
                 for k,v in pairs(modems) do
                   if k ~= side then
                     peripheral.call(k, "transmit", MODEM_CHANNEL, MODEM_CHANNEL, message)
                   end
                 end
               else
-                macCache[ethernetFrame.src:toBin()] = {os.epoch("utc")+macCacheTimeout, side}
+                macCache[ethernetFrame.source] = {os.epoch("utc")+macCacheTimeout, side}
 
-                local c = macCache[ethernetFrame.dst:toBin()]
+                local c = macCache[ethernetFrame.destination]
                 if c and c[1] <= os.epoch("utc") then
                   c = nil
-                  macCache[ethernetFrame.dst:toBin()] = nil
+                  macCache[ethernetFrame.destination] = nil
                 end
 
                 if c then

@@ -30,14 +30,26 @@ local function fetchFile(url, destination)
     print(string.format("\n%s > %s", url, destination))
     if fs.exists(destination) then
         print(string.format("%s already exists, skipping", destination))
-        return
+        return true
     end
-    fs.makeDir(fs.getDir(destination))
-    local file = fs.open(destination, "w")
-    local httph = assert(http.get(url))
-    file.write(httph.readAll())
+    local httph, requestError = http.get(url)
+    if not httph then
+        printError("Download failed: " .. tostring(requestError))
+        return false
+    end
+    local body = httph.readAll()
     httph.close()
+    fs.makeDir(fs.getDir(destination))
+    local temporary = destination .. ".download"
+    local file = fs.open(temporary, "w")
+    if not file then
+        printError("Could not open " .. temporary)
+        return false
+    end
+    file.write(body)
     file.close()
+    fs.move(temporary, destination)
+    return true
 end
 
 local function parseIndex(url)
@@ -48,6 +60,8 @@ local function parseIndex(url)
     local t = assert(textutils.unserialiseJSON(d))
     return t
 end
+
+local installPrefix = "/netlib"
 
 local function joinPaths(p1, p2)
     if p1:sub(-1) == "/" then
@@ -70,7 +84,15 @@ local function joinPaths(p1, p2)
     return "/" .. table.concat(parts, "/")
 end
 
-local installPrefix = "/netlib"
+local function installPath(relativePath)
+    if type(relativePath) ~= "string" or relativePath:sub(1, 1) == "/" then return nil end
+    for part in relativePath:gmatch("[^/]+") do
+        if part == ".." then return nil end
+    end
+    local destination = joinPaths(installPrefix, relativePath)
+    if destination ~= installPrefix and destination:sub(1, #installPrefix + 1) ~= installPrefix .. "/" then return nil end
+    return destination
+end
 
 print("\nNETLIB INSTALLER")
 print("================\n")
@@ -94,8 +116,9 @@ local index = parseIndex(indexPath)
 for k,v in pairs(index) do
     assert(type(k) == "string")
     assert(type(v) == "string")
-
-    fetchFile(k, joinPaths(installPrefix, v))
+    local destination = installPath(v)
+    assert(destination, "installer index destination must remain inside " .. installPrefix)
+    assert(fetchFile(k, destination), "failed to download " .. k)
 end
 
 print("================\n")
@@ -109,8 +132,17 @@ if modifyStartup then
         h.close()
     end
 
+    local marker = "__netlib_bootstrap_v2"
+    if not d:find(marker, 1, true) then
+        d = string.format([[if not _G["%s"] then
+    _G["%s"] = true
+    shell.run("%s")
+    return
+end
+]], marker, marker, joinPaths(installPrefix, "nltlco.lua")) .. d
+    end
     local h = fs.open("/startup.lua", "w")
-    h.writeLine(string.format([[if not _G["_nltlco-6b10affc-757d-4007-a0d3-06d51b1469b5"] then shell.run("%s"); return end]], joinPaths(installPrefix, "nltlco.lua")))
+    if not h then error("could not write /startup.lua") end
     h.write(d)
     h.close()
 end

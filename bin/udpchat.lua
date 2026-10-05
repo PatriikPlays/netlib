@@ -1,5 +1,27 @@
 assert(netlib, "netlib not loaded")
-assert(netlib.easy, "netlib.easy not loaded")
+assert(net, "netlib stack not loaded")
+
+local sockets = {}
+local function udpSocket(port)
+    if not sockets[port] then
+        local socket, err = net:socket(netlib.AF_INET, netlib.SOCK_DGRAM)
+        assert(socket, err)
+        local bound, bindError = socket:bind("0.0.0.0", port)
+        assert(bound, bindError)
+        sockets[port] = socket
+    end
+    return sockets[port]
+end
+
+local function udpSend(destination, sourcePort, destinationPort, payload)
+    return udpSocket(sourcePort):sendto(payload, destination, destinationPort)
+end
+
+local function udpRecv(port)
+    local payload, source, sourcePort = udpSocket(port):recvfrom()
+    if not payload then error("UDP receive failed: " .. tostring(source), 2) end
+    return { payload = payload, srcPort = sourcePort }, { src = source }
+end
 
 local typesC2S = {
     ["join"] = 0,
@@ -27,8 +49,8 @@ local function server(port)
 
     local function send(connID, payload)
         local numdst, dstPort = string.unpack(">I4I2", connID)
-        local dstAddr = select(2, netlib.struct.IPv4Addr.fromInt(numdst))
-        netlib.easy:udpSend(nil, nil, dstAddr, port, dstPort, payload)
+        local dstAddr = netlib.ipv4ToString(numdst)
+        udpSend(dstAddr, port, dstPort, payload)
     end
 
     local function broadcast(payload)
@@ -53,8 +75,8 @@ local function server(port)
         end,
         function()
             while true do
-                local udp, ipv4 = netlib.easy:udpRecv(port)
-                local connID = ipv4.src:toBin()..string.pack(">I2", udp.srcPort)
+                local udp, ipv4 = udpRecv(port)
+                local connID = string.pack(">I4I2", netlib.ipv4ToNumber(ipv4.src), udp.srcPort)
 
                 if users[connID] then
                     users[connID][1] = os.epoch("utc")
@@ -95,20 +117,20 @@ local function server(port)
 end
 
 local function client(serverAddr, serverPort, nickname)
-    local srcPort = math.random(32768,65536)
+    local srcPort = math.random(32768,65535)
     local messageID = 0
 
     local function join()
         local messageIDBin = string.pack(">I4", messageID)
-        netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["join"])..messageIDBin..nickname)
+        udpSend(serverAddr, srcPort, serverPort, string.char(typesC2S["join"])..messageIDBin..nickname)
         messageID = messageID + 1
 
         local ok = false
 
         parallel.waitForAny(function()
             while true do
-                local udp, ipv4 = netlib.easy:udpRecv(srcPort)
-                if ipv4.src:toBin() == serverAddr:toBin() and #udp.payload > 0 then
+                local udp, ipv4 = udpRecv(srcPort)
+                if ipv4.src == serverAddr and #udp.payload > 0 then
                     local type = string.byte(udp.payload)
                     if type == typesS2C["reply"] and udp.payload:sub(2,5) == messageIDBin then
                         ok = true
@@ -141,7 +163,7 @@ local function client(serverAddr, serverPort, nickname)
 
     local function drawTitle()
         local w = titleWindow.getSize()
-        local sTitle = nickname .. " on " .. serverAddr:toString() .. ":" .. serverPort
+        local sTitle = nickname .. " on " .. serverAddr .. ":" .. serverPort
         titleWindow.setTextColour(highlightColour)
         titleWindow.setCursorPos(math.floor(w / 2 - #sTitle / 2), 1)
         titleWindow.clearLine()
@@ -166,8 +188,8 @@ local function client(serverAddr, serverPort, nickname)
     run[1] = function()
         while true do
             while true do
-                local udp, ipv4 = netlib.easy:udpRecv(srcPort)
-                if ipv4.src:toBin() == serverAddr:toBin() and #udp.payload > 0 then
+                local udp, ipv4 = udpRecv(srcPort)
+                if ipv4.src == serverAddr and #udp.payload > 0 then
                     lastMessageTime = os.epoch("utc")
 
                     local type = string.byte(udp.payload)
@@ -175,31 +197,31 @@ local function client(serverAddr, serverPort, nickname)
                     if type == typesS2C["messageBroadcast"] then
                         local userAddrNum, userPort, nicknameLength = string.unpack(">I4I2I1", udp.payload:sub(2,8))
                         assert(nicknameLength > 0)
-                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
+                        local userAddr = netlib.ipv4ToString(userAddrNum)
                         local nickname = udp.payload:sub(9,nicknameLength+8)
                         local message = udp.payload:sub(9+nicknameLength)
 
-                        printMessage(string.format("<%s@%s:%d>: %s", nickname, userAddr:toString(), userPort, message), textColour)
+                        printMessage(string.format("<%s@%s:%d>: %s", nickname, userAddr, userPort, message), textColour)
                     elseif type == typesS2C["joinBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
+                        local userAddr = netlib.ipv4ToString(userAddrNum)
                         local nickname = udp.payload:sub(8,16+7)
-                        printMessage(string.format("<%s@%s:%d> joined", nickname, userAddr:toString(), userPort), highlightColour)
+                        printMessage(string.format("<%s@%s:%d> joined", nickname, userAddr, userPort), highlightColour)
                     elseif type == typesS2C["leaveBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
+                        local userAddr = netlib.ipv4ToString(userAddrNum)
                         local nickname = udp.payload:sub(8,16+7)
-                        printMessage(string.format("<%s@%s:%d> left", nickname, userAddr:toString(), userPort), highlightColour)
+                        printMessage(string.format("<%s@%s:%d> left", nickname, userAddr, userPort), highlightColour)
                     elseif type == typesS2C["kickBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
+                        local userAddr = netlib.ipv4ToString(userAddrNum)
                         local nickname = udp.payload:sub(8,16+7)
-                        printMessage(string.format("<%s@%s:%d> kicked", nickname, userAddr:toString(), userPort), highlightColour)
+                        printMessage(string.format("<%s@%s:%d> kicked", nickname, userAddr, userPort), highlightColour)
                     elseif type == typesS2C["timeoutBroadcast"] then
                         local userAddrNum, userPort = string.unpack(">I4I2", udp.payload:sub(2,7))
-                        local userAddr = select(2, netlib.struct.IPv4Addr.fromInt(userAddrNum))
+                        local userAddr = netlib.ipv4ToString(userAddrNum)
                         local nickname = udp.payload:sub(8,16+7)
-                        printMessage(string.format("<%s@%s:%d> timed out", nickname, userAddr:toString(), userPort), highlightColour)
+                        printMessage(string.format("<%s@%s:%d> timed out", nickname, userAddr, userPort), highlightColour)
                     elseif type == typesS2C["kick"] then
                         error("kicked")
                     end
@@ -211,7 +233,7 @@ local function client(serverAddr, serverPort, nickname)
     run[2] = function()
         while true do
             sleep(5)
-            netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["ping"]))
+            udpSend(serverAddr, srcPort, serverPort, string.char(typesC2S["ping"]))
         end
     end
 
@@ -219,7 +241,7 @@ local function client(serverAddr, serverPort, nickname)
         while true do
             sleep(1)
             if lastMessageTime + 16000 <= os.epoch("utc") then
-                netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
+                udpSend(serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
                 error("server timed out")
             end
         end
@@ -236,10 +258,10 @@ local function client(serverAddr, serverPort, nickname)
 
             local sChat = read(nil, tSendHistory)
             if string.match(sChat, "^/leave") then
-                netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
+                udpSend(serverAddr, srcPort, serverPort, string.char(typesC2S["leave"]))
                 error("left")
             else
-                netlib.easy:udpSend(nil, nil, serverAddr, srcPort, serverPort, string.char(typesC2S["message"])..sChat)
+                udpSend(serverAddr, srcPort, serverPort, string.char(typesC2S["message"])..sChat)
                 table.insert(tSendHistory, sChat)
             end
         end
@@ -336,9 +358,7 @@ elseif args[1] == "join" then
         return
     end
 
-    local suc, saddr = netlib.struct.IPv4Addr.fromString(args[2])
-    assert(suc, saddr)
-    client(saddr, tonumber(args[3]), args[4])
+    client(args[2], tonumber(args[3]), args[4])
 else
     printUsage()
 end

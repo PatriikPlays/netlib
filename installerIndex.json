@@ -1,7 +1,10 @@
 {
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/netlib.lua": "netlib.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/nltlco.lua": "nltlco.lua",
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/ip.lua": "bin/ip.lua",
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/ping.lua": "bin/ping.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/config/easyconfig.lua": "config/easyconfig.lua",
-    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/utils/switch.lua": "utils/switch.lua",
-    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/utils/udpchat.lua": "utils/udpchat.lua"
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/switch.lua": "bin/switch.lua",
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/udpchat.lua": "bin/udpchat.lua",
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bridge/modem.lua": "bridge/modem.lua"
 }
