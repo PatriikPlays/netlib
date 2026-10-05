@@ -1,9 +1,11 @@
 local netlib = {
     AF_INET = 2,
+    SOCK_STREAM = 1,
     SOCK_DGRAM = 2,
     ETH_P_IP = 0x0800,
     ETH_P_ARP = 0x0806,
     IPPROTO_ICMP = 1,
+    IPPROTO_TCP = 6,
     IPPROTO_UDP = 17
 }
 
@@ -71,7 +73,7 @@ local function decodeIPv4(packet)
     if bit32.rshift(versionIhl, 4) ~= 4 or headerLength ~= 20 or headerLength > #packet then
         return nil, "invalid IPv4 header"
     end
-    if length < headerLength or length ~= #packet then return nil, "invalid IPv4 total length" end
+    if length < headerLength or length > #packet or #packet - length > 46 then return nil, "invalid IPv4 total length" end
     if checksum(packet:sub(1, headerLength)) ~= 0 then return nil, "invalid IPv4 header checksum" end
     local flags = bit32.rshift(fragment, 13)
     local offset = bit32.band(fragment, 0x1FFF) * 8
@@ -80,6 +82,33 @@ local function decodeIPv4(packet)
         id = id, flags = flags, offset = offset, more = bit32.band(flags, 1) ~= 0,
         dontFragment = bit32.band(flags, 2) ~= 0, tos = tos,
         payload = packet:sub(headerLength + 1, length), raw = packet:sub(1, length)
+    }
+end
+
+local function tcpChecksum(source, destination, segment)
+    local pseudoHeader = string.pack(">I4I4BBI2", source, destination, 0, netlib.IPPROTO_TCP, #segment)
+    return checksum(pseudoHeader .. segment)
+end
+
+local function encodeTCP(source, destination, sourcePort, destinationPort, sequence, acknowledgement, flags, window, payload)
+    local header = string.pack(">I2I2I4I4BBI2I2I2", sourcePort, destinationPort, sequence,
+        acknowledgement, 0x50, flags, window, 0, 0) .. payload
+    local sum = tcpChecksum(source, destination, header)
+    return string.pack(">I2I2I4I4BBI2I2I2", sourcePort, destinationPort, sequence,
+        acknowledgement, 0x50, flags, window, sum, 0) .. payload
+end
+
+local function decodeTCP(segment, source, destination)
+    if type(segment) ~= "string" or #segment < 20 then return nil, "short TCP segment" end
+    local sourcePort, destinationPort, sequence, acknowledgement, offsetReserved, flags, window, headerSum =
+        string.unpack(">I2I2I4I4BBI2I2", segment)
+    local headerLength = bit32.rshift(offsetReserved, 4) * 4
+    if headerLength < 20 or headerLength > #segment then return nil, "invalid TCP header length" end
+    if tcpChecksum(source, destination, segment) ~= 0 then return nil, "invalid TCP checksum" end
+    return {
+        sourcePort = sourcePort, destinationPort = destinationPort, sequence = sequence,
+        acknowledgement = acknowledgement, flags = flags, window = window,
+        payload = segment:sub(headerLength + 1)
     }
 end
 
@@ -97,6 +126,8 @@ netlib.ipv4ToString = formatIPv4
 netlib.ipv4ToNumber = parseIPv4
 netlib.parseEthernet = decodeEthernet
 netlib.parseIPv4Packet = decodeIPv4
+netlib.parseTCPPacket = decodeTCP
+netlib.encodeTCPPacket = encodeTCP
 
 local Stack = {}
 Stack.__index = Stack
@@ -118,6 +149,8 @@ function netlib.new(config)
     config = config or {}
     local stack = setmetatable({
         interfaces = {}, interfaceOrder = {}, routes = {}, sockets = {}, nextSocketId = 0,
+        tcpConnections = {}, tcpListeners = {}, tcpBindings = {},
+        nextTCPID = 0,
         nextEphemeralPort = 49152, forwarding = config.forwarding == true,
         arpTimeout = 60000, arpWaitTimeout = 3000, reassemblyTimeout = 30000,
         reassembly = {}, forwardPending = {}, protocolHandlers = {}, pendingPings = {},
@@ -500,6 +533,7 @@ function Stack:_handleFrame(interface, message)
     if packet then
         if packet.protocol == netlib.IPPROTO_UDP then self:_deliverUDP(packet)
         elseif packet.protocol == netlib.IPPROTO_ICMP then self:_handleICMP(interface, frame.source, packet)
+        elseif packet.protocol == netlib.IPPROTO_TCP then self:_handleTCP(interface, frame.source, packet)
         elseif self.protocolHandlers[packet.protocol] then self.protocolHandlers[packet.protocol](self, interface, packet) end
     end
 end
@@ -522,6 +556,190 @@ function Stack:_handleICMP(interface, sourceMAC, packet)
         if pending then
             pending.received = now()
             os.queueEvent("netlib_ping", key)
+        end
+    end
+end
+
+local function seqAdd(value, amount)
+    return (value + amount) % 4294967296
+end
+
+local function randomSequence()
+    return math.random(0, 65535) * 65536 + math.random(0, 65535)
+end
+
+local function seqDistance(value, base)
+    return (value - base) % 4294967296
+end
+
+local function tcpTuple(localAddress, localPort, remoteAddress, remotePort)
+    return table.concat({ localAddress, localPort, remoteAddress, remotePort }, ":")
+end
+
+local function tcpBindKey(address, port)
+    return address .. ":" .. port
+end
+
+local TCPSocket = {}
+TCPSocket.__index = TCPSocket
+
+function Stack:_sendTCP(connection, flags, payload, sequence, advance)
+    payload = payload or ""
+    sequence = sequence == nil and connection.sndNxt or sequence
+    local acknowledgement = connection.rcvNxt or 0
+    local window = math.max(0, math.min(65535, connection.receiveLimit - #connection.receiveBuffer))
+    local segment = encodeTCP(connection.localAddress, connection.remoteAddress,
+        connection.localPort, connection.remotePort, sequence, acknowledgement,
+        flags, window, payload)
+    local sent, err
+    if connection.link then
+        self.ipId = ((self.ipId or 0) + 1) % 65536
+        sent, err = self:_emitIP(connection.link.interface, connection.link.mac, {
+            source = connection.localAddress, destination = connection.remoteAddress,
+            protocol = netlib.IPPROTO_TCP, payload = segment, id = self.ipId or 0,
+            ttl = 64, flags = 0, offset = 0, more = false, dontFragment = false
+        })
+    else
+        sent, err = self:sendIPv4(connection.remoteAddress, netlib.IPPROTO_TCP, segment,
+            connection.localAddress, 64)
+    end
+    if sent and advance then
+        local consumed = #payload
+        if bit32.band(flags, 0x02) ~= 0 then consumed = consumed + 1 end
+        if bit32.band(flags, 0x01) ~= 0 then consumed = consumed + 1 end
+        connection.sndNxt = seqAdd(sequence, consumed)
+    end
+    return sent, err
+end
+
+function Stack:_tcpNotify(connection)
+    os.queueEvent("netlib_tcp", connection.id)
+    if connection.listener then os.queueEvent("netlib_tcp_accept", connection.listener.id) end
+end
+
+function Stack:_handleTCP(interface, sourceMAC, packet)
+    local segment = decodeTCP(packet.payload, packet.source, packet.destination)
+    if not segment then return end
+    local key = tcpTuple(packet.destination, segment.destinationPort, packet.source, segment.sourcePort)
+    local connection = self.tcpConnections[key]
+    local syn = bit32.band(segment.flags, 0x02) ~= 0
+    local ack = bit32.band(segment.flags, 0x10) ~= 0
+    local fin = bit32.band(segment.flags, 0x01) ~= 0
+    local rst = bit32.band(segment.flags, 0x04) ~= 0
+
+    if not connection then
+        local listener = self.tcpListeners[tcpBindKey(packet.destination, segment.destinationPort)]
+            or self.tcpListeners[tcpBindKey(0, segment.destinationPort)]
+        if not listener or not syn or ack or rst then return end
+        local pending = #listener.acceptQueue
+        for _, candidate in pairs(self.tcpConnections) do
+            if candidate.listener == listener and candidate.state == "SYN_RECEIVED" then pending = pending + 1 end
+        end
+        if pending >= listener.backlog then return end
+        self.nextTCPID = self.nextTCPID + 1
+        connection = setmetatable({
+            stack = self, id = self.nextTCPID, state = "SYN_RECEIVED", listener = listener,
+            localAddress = packet.destination, localPort = segment.destinationPort,
+            remoteAddress = packet.source, remotePort = segment.sourcePort,
+            connectionKey = key,
+            iss = randomSequence(), sndUna = 0, sndNxt = 0,
+            rcvNxt = seqAdd(segment.sequence, 1), peerWindow = segment.window,
+            receiveLimit = 65535, receiveBuffer = "", link = { interface = interface, mac = sourceMAC }
+        }, TCPSocket)
+        connection.sndUna, connection.sndNxt = connection.iss, connection.iss
+        self.tcpConnections[key] = connection
+        self:_sendTCP(connection, 0x12, "", nil, true)
+        return
+    end
+
+    connection.link = { interface = interface, mac = sourceMAC }
+    connection.peerWindow = segment.window
+    if connection.state == "SYN_RECEIVED" and syn and not ack then
+        self:_sendTCP(connection, 0x12, "", connection.iss, false)
+        return
+    end
+    if rst then
+        connection.error = "connection reset by peer"
+        connection.state = "CLOSED"
+        self.tcpConnections[key] = nil
+        self:_tcpNotify(connection)
+        return
+    end
+
+    if connection.state == "SYN_SENT" then
+        if syn and ack and segment.acknowledgement == connection.sndNxt then
+            connection.sndUna = segment.acknowledgement
+            connection.rcvNxt = seqAdd(segment.sequence, 1)
+            connection.state = "ESTABLISHED"
+            self:_sendTCP(connection, 0x10, "", nil, false)
+            self:_tcpNotify(connection)
+        end
+        return
+    end
+
+    if ack then
+        local outstanding = seqDistance(connection.sndNxt, connection.sndUna)
+        local acknowledged = seqDistance(segment.acknowledgement, connection.sndUna)
+        if acknowledged <= outstanding then
+            connection.sndUna = segment.acknowledgement
+            if connection.finSequence and connection.sndUna == connection.finSequence then
+                connection.finAcknowledged = true
+                if connection.state == "FIN_WAIT_1" or connection.state == "LAST_ACK" then
+                    connection.state = "CLOSED"
+                    if connection.connectionKey then self.tcpConnections[connection.connectionKey] = nil end
+                end
+            end
+            if connection.state == "SYN_RECEIVED" and connection.sndUna == connection.sndNxt then
+                connection.state = "ESTABLISHED"
+                local listener = connection.listener
+                listener.acceptQueue[#listener.acceptQueue + 1] = connection
+                self:_tcpNotify(connection)
+            end
+            self:_tcpNotify(connection)
+        end
+    end
+
+    local payloadLength = #segment.payload
+    local expected = connection.rcvNxt
+    if segment.sequence == expected and payloadLength > 0 then
+        local room = connection.receiveLimit - #connection.receiveBuffer
+        if payloadLength <= room then
+            connection.receiveBuffer = connection.receiveBuffer .. segment.payload
+            connection.rcvNxt = seqAdd(connection.rcvNxt, payloadLength)
+            connection.lastReceive = now()
+            self:_tcpNotify(connection)
+        end
+    end
+    local finSequence = seqAdd(segment.sequence, payloadLength)
+    if fin and finSequence == connection.rcvNxt then
+        connection.rcvNxt = seqAdd(connection.rcvNxt, 1)
+        connection.remoteClosed = true
+        if connection.state == "ESTABLISHED" then connection.state = "CLOSE_WAIT" end
+        self:_tcpNotify(connection)
+    end
+    if payloadLength > 0 or fin or syn then
+        self:_sendTCP(connection, 0x10, "", nil, false)
+    end
+end
+
+local function waitTCPEvent(connection, listener, timeout, onRetry)
+    local retries = math.max(1, math.ceil(timeout))
+    local timer = os.startTimer(1)
+    while true do
+        local event, id = os.pullEvent()
+        if event == "netlib_tcp" and connection and id == connection.id then
+            if connection.error then return nil, connection.error end
+            return true
+        elseif event == "netlib_tcp_accept" and listener and id == listener.id then
+            return true
+        elseif event == "timer" and id == timer then
+            retries = retries - 1
+            if retries <= 0 then return nil, "timed out" end
+            if onRetry then
+                local ok, err = onRetry()
+                if not ok then return nil, err end
+            end
+            timer = os.startTimer(1)
         end
     end
 end
@@ -557,6 +775,202 @@ function Stack:ping(destination, timeout)
             return nil, "timeout"
         end
     end
+end
+
+function TCPSocket:bind(address, port)
+    if self.bound then return nil, "socket is already bound" end
+    local localAddress
+    if address == nil or address == "0.0.0.0" then localAddress = 0 else localAddress = parseIPv4(address) end
+    if not localAddress then return nil, "invalid bind address" end
+    if localAddress ~= 0 then
+        local assigned = false
+        for _, name in ipairs(self.stack.interfaceOrder) do
+            if addressOnInterface(self.stack.interfaces[name], localAddress) then assigned = true; break end
+        end
+        if not assigned then return nil, "cannot bind to an address not assigned to this host" end
+    end
+    if port == nil or port == 0 then
+        for _ = 1, 16384 do
+            local candidate = self.stack.nextEphemeralPort
+            self.stack.nextEphemeralPort = candidate >= 65535 and 49152 or candidate + 1
+            if not self.stack.tcpBindings[candidate] then port = candidate; break end
+        end
+    end
+    if type(port) ~= "number" or port < 1 or port > 65535 or port ~= math.floor(port) then return nil, "invalid TCP port" end
+    if self.stack.tcpBindings[port] then return nil, "TCP port already in use" end
+    self.address, self.port, self.bound = localAddress, port, true
+    self.stack.tcpBindings[port] = self
+    return true
+end
+
+function TCPSocket:listen(backlog)
+    if not self.bound or self.state ~= "CLOSED" then return nil, "bind the socket before listen" end
+    backlog = backlog or 4
+    if type(backlog) ~= "number" or backlog < 1 or backlog > 32 or backlog ~= math.floor(backlog) then
+        return nil, "backlog must be an integer from 1 to 32"
+    end
+    local key = tcpBindKey(self.address, self.port)
+    if self.stack.tcpListeners[key] then return nil, "TCP address already listening" end
+    self.backlog, self.acceptQueue, self.state = backlog, {}, "LISTEN"
+    self.stack.tcpListeners[key] = self
+    return true
+end
+
+function TCPSocket:accept(timeout)
+    if self.state ~= "LISTEN" then return nil, "socket is not listening" end
+    timeout = timeout or 30
+    if type(timeout) ~= "number" or timeout < 0 then return nil, "invalid timeout" end
+    while #self.acceptQueue == 0 do
+        if timeout == 0 then return nil, "timeout" end
+        local ok, err = waitTCPEvent(nil, self, timeout)
+        if not ok then return nil, err end
+    end
+    return table.remove(self.acceptQueue, 1)
+end
+
+function TCPSocket:connect(address, port, timeout)
+    if self.state ~= "CLOSED" then return nil, "socket is not closed" end
+    local remoteAddress = parseIPv4(address)
+    if not remoteAddress then return nil, "TCP currently requires a numeric IPv4 address" end
+    if type(port) ~= "number" or port < 1 or port > 65535 or port ~= math.floor(port) then return nil, "invalid TCP port" end
+    timeout = timeout or 10
+    if type(timeout) ~= "number" or timeout <= 0 then return nil, "timeout must be positive" end
+    if not self.bound then
+        local ok, err = self:bind("0.0.0.0", 0)
+        if not ok then return nil, err end
+    end
+    local route, routeError = self.stack:lookupRoute(remoteAddress)
+    if not route then return nil, routeError end
+    local interface = self.stack.interfaces[route.dev]
+    if self.address == 0 then
+        for _, configured in ipairs(interface.addresses) do self.address = configured.address; break end
+    end
+    if self.address == 0 then return nil, "selected interface has no IPv4 address" end
+    self.localAddress, self.localPort = self.address, self.port
+    self.remoteAddress, self.remotePort = remoteAddress, port
+    self.connectionKey = tcpTuple(self.address, self.port, remoteAddress, port)
+    if self.stack.tcpConnections[self.connectionKey] then return nil, "TCP connection already exists" end
+    self.state = "SYN_SENT"
+    self.iss = randomSequence()
+    self.sndUna, self.sndNxt = self.iss, self.iss
+    self.rcvNxt, self.peerWindow = 0, 65535
+    self.receiveLimit, self.receiveBuffer = 65535, ""
+    self.stack.tcpConnections[self.connectionKey] = self
+    local sent, err = self.stack:_sendTCP(self, 0x02, "", nil, true)
+    if not sent then self.stack.tcpConnections[self.connectionKey] = nil; self.state = "CLOSED"; return nil, err end
+    local ok, waitError = waitTCPEvent(self, nil, timeout, function()
+        return self.stack:_sendTCP(self, 0x02, "", self.iss, false)
+    end)
+    if not ok or self.state ~= "ESTABLISHED" then
+        self.stack.tcpConnections[self.connectionKey] = nil
+        self.state = "CLOSED"
+        return nil, waitError or "connection failed"
+    end
+    return true
+end
+
+function TCPSocket:send(data, timeout)
+    if self.state ~= "ESTABLISHED" and self.state ~= "CLOSE_WAIT" then return nil, "TCP connection is not writable" end
+    if type(data) ~= "string" then return nil, "TCP data must be a string" end
+    timeout = timeout or 5
+    local sentBytes = 0
+    while sentBytes < #data do
+        if self.peerWindow <= 0 then return nil, "peer advertised a zero receive window" end
+        local route = self.stack:lookupRoute(self.remoteAddress)
+        local interface = self.link and self.link.interface or (route and self.stack.interfaces[route.dev])
+        if not interface then return nil, "no route to TCP peer" end
+        local segmentSize = math.min(536, interface.mtu - 40, self.peerWindow, #data - sentBytes)
+        if segmentSize <= 0 then return nil, "interface MTU is too small for TCP" end
+        local chunk = data:sub(sentBytes + 1, sentBytes + segmentSize)
+        local sequence = self.sndNxt
+        local ok, err = self.stack:_sendTCP(self, 0x18, chunk, nil, true)
+        if not ok then return nil, err end
+        local endSequence = self.sndNxt
+        local acknowledged, waitError = waitTCPEvent(self, nil, timeout, function()
+            return self.stack:_sendTCP(self, 0x18, chunk, sequence, false)
+        end)
+        while acknowledged and self.sndUna ~= endSequence do
+            acknowledged, waitError = waitTCPEvent(self, nil, timeout, function()
+                return self.stack:_sendTCP(self, 0x18, chunk, sequence, false)
+            end)
+        end
+        if not acknowledged then return nil, waitError end
+        sentBytes = sentBytes + #chunk
+        self.peerWindow = math.max(0, self.peerWindow)
+    end
+    return sentBytes
+end
+
+function TCPSocket:recv(maxBytes, timeout)
+    if self.state == "CLOSED" and not self.remoteClosed then return nil, self.error or "TCP connection is closed" end
+    maxBytes = maxBytes or 4096
+    timeout = timeout == nil and 30 or timeout
+    if type(maxBytes) ~= "number" or maxBytes < 1 or maxBytes ~= math.floor(maxBytes) then return nil, "maxBytes must be a positive integer" end
+    if type(timeout) ~= "number" or timeout < 0 then return nil, "invalid timeout" end
+    while #self.receiveBuffer == 0 do
+        if self.remoteClosed then return "" end
+        if timeout == 0 then return nil, "timeout" end
+        local ok, err = waitTCPEvent(self, nil, timeout)
+        if not ok then return nil, err end
+    end
+    local count = math.min(maxBytes, #self.receiveBuffer)
+    local data = self.receiveBuffer:sub(1, count)
+    self.receiveBuffer = self.receiveBuffer:sub(count + 1)
+    if self.link then self.stack:_sendTCP(self, 0x10, "", nil, false) end
+    return data
+end
+
+function TCPSocket:shutdownWrite(timeout)
+    if self.finSent then return true end
+    if self.state ~= "ESTABLISHED" and self.state ~= "CLOSE_WAIT" then return nil, "TCP connection is not established" end
+    timeout = timeout or 5
+    local sequence = self.sndNxt
+    local ok, err = self.stack:_sendTCP(self, 0x11, "", nil, true)
+    if not ok then return nil, err end
+    self.finSent = true
+    self.finSequence = self.sndNxt
+    local acknowledged, waitError = waitTCPEvent(self, nil, timeout, function()
+        return self.stack:_sendTCP(self, 0x11, "", sequence, false)
+    end)
+    while acknowledged and not self.finAcknowledged do
+        acknowledged, waitError = waitTCPEvent(self, nil, timeout, function()
+            return self.stack:_sendTCP(self, 0x11, "", sequence, false)
+        end)
+    end
+    if not acknowledged then return nil, waitError end
+    return true
+end
+
+function TCPSocket:close()
+    if self.state == "LISTEN" then
+        self.stack.tcpListeners[tcpBindKey(self.address, self.port)] = nil
+        self.state = "CLOSED"
+    elseif self.connectionKey and self.state ~= "CLOSED" and not self.finSent then
+        local state = self.state
+        local sent = self.stack:_sendTCP(self, 0x11, "", nil, true)
+        if sent then
+            self.finSent = true
+            self.finSequence = self.sndNxt
+            self.state = state == "CLOSE_WAIT" and "LAST_ACK" or "FIN_WAIT_1"
+        else
+            self.stack.tcpConnections[self.connectionKey] = nil
+            self.state = "CLOSED"
+        end
+    elseif not self.connectionKey then
+        self.state = "CLOSED"
+    end
+    if self.port and self.stack.tcpBindings[self.port] == self then self.stack.tcpBindings[self.port] = nil end
+    self.receiveBuffer = ""
+    return true
+end
+
+local function newTCPSocket(stack)
+    stack.nextSocketId = stack.nextSocketId + 1
+    return setmetatable({
+        stack = stack, id = stack.nextSocketId, state = "CLOSED", address = 0,
+        receiveLimit = 65535, receiveBuffer = "", sndUna = 0, sndNxt = 0,
+        rcvNxt = 0, peerWindow = 65535
+    }, TCPSocket)
 end
 
 function Stack:_cleanup(current)
@@ -602,8 +1016,13 @@ function Stack:run()
 end
 
 function Stack:socket(domain, socketType, protocol)
-    if domain ~= netlib.AF_INET or socketType ~= netlib.SOCK_DGRAM or (protocol and protocol ~= 0 and protocol ~= netlib.IPPROTO_UDP) then
-        return nil, "only AF_INET/SOCK_DGRAM sockets are supported"
+    if domain ~= netlib.AF_INET then return nil, "only AF_INET sockets are supported" end
+    if socketType == netlib.SOCK_STREAM then
+        if protocol and protocol ~= 0 and protocol ~= netlib.IPPROTO_TCP then return nil, "invalid stream protocol" end
+        return newTCPSocket(self)
+    end
+    if socketType ~= netlib.SOCK_DGRAM or (protocol and protocol ~= 0 and protocol ~= netlib.IPPROTO_UDP) then
+        return nil, "only SOCK_STREAM and SOCK_DGRAM sockets are supported"
     end
     self.nextSocketId = self.nextSocketId + 1
     local socket = { stack = self, id = self.nextSocketId, queue = {}, queueLimit = 64, address = 0, port = nil, closed = false }

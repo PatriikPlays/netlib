@@ -1,6 +1,6 @@
 # netlib
 
-netlib is an IPv4 networking stack for ComputerCraft: Tweaked, using modem peripherals as links. It provides Ethernet framing, ARP, IPv4 routing and forwarding, fragmentation/reassembly, UDP, and ICMP echo (`ping`). TCP is not implemented; the protocol dispatch hook is intended to let a future TCP implementation share the IP and interface layers.
+netlib is an IPv4 networking stack for ComputerCraft: Tweaked, using modem peripherals as links. It provides Ethernet framing, ARP, IPv4 routing and forwarding, fragmentation/reassembly, UDP, TCP streams, and ICMP echo (`ping`).
 
 ## Install and boot
 
@@ -32,7 +32,7 @@ ip forwarding on
 
 Forwarding is off by default. Routes use longest-prefix match, then the lower metric. Gateway routes resolve the gateway's MAC address with ARP on the selected interface.
 
-The `ping ADDRESS [COUNT]` command sends IPv4 ICMP echo requests. The bundled `udpchat` and `switch` commands are installed in `bin` with `ip` and `ping`.
+The `ping ADDRESS [COUNT]` command sends IPv4 ICMP echo requests. The bundled `udpchat`, `switch`, and `httpget` commands are installed in `bin` with `ip` and `ping`.
 
 ## Internet bridge
 
@@ -60,10 +60,33 @@ socket:close()
 
 To run the stack from a custom program, create it with `local net = netlib.new(config)` and run `net:run()` concurrently with applications using `parallel`.
 
+## TCP and HTTP
+
+TCP stream sockets use the same address strings and port numbers:
+
+```lua
+local socket = assert(net:socket(netlib.AF_INET, netlib.SOCK_STREAM))
+assert(socket:connect("192.0.2.20", 80, 10))
+assert(socket:send("GET / HTTP/1.1\r\nHost: example\r\nConnection: close\r\n\r\n"))
+local response = socket:recv(4096, 30)
+socket:close()
+```
+
+The `httpget http://HOST[:PORT]/PATH [DNS_SERVER]` program performs a basic HTTP/1.1 GET and prints the raw response:
+
+```text
+httpget http://example.com/
+httpget http://example.com/status 1.1.1.1
+```
+
+Hostnames are resolved with an IPv4 DNS A query (default resolver `1.1.1.1`); numeric IPv4 literals work without DNS. HTTPS is not supported because TLS is not implemented.
+
+TCP currently provides a basic three-way handshake, cumulative acknowledgements, retransmission on timeout, in-order stream delivery, and FIN/RST handling. It does not implement congestion control, selective acknowledgements, robust out-of-order buffering, simultaneous open, or all TCP options. It is intended for light, basic client/server traffic, not production-grade high-throughput use.
+
 ## Current scope
 
 - IPv4 header checksums are generated and verified. UDP checksums are zero, which is valid for IPv4.
-- IPv4 options, IPv6, TCP, ICMP error messages, DHCP, DNS, raw sockets, and automatic address configuration are not implemented.
+- IPv4 options, IPv6, ICMP error messages, DHCP, raw sockets, and automatic address configuration are not implemented.
 - Forwarding drops packets whose TTL expires; ICMP error responses are not implemented.
 - The modem link carries a compact Ethernet header and payload, without Ethernet padding or FCS. This rewrite is not wire-compatible with earlier netlib releases; all participating computers and switch scripts must be updated together.
 - IPv4 addresses and routes are static. There is no route protocol or network discovery beyond ARP.

@@ -63,6 +63,18 @@ local function checksum(data)
     return bit32.band(bit32.bnot(sum), 0xFFFF)
 end
 
+local tcpSource, tcpDestination = netlib.ipv4ToNumber("192.0.2.1"), netlib.ipv4ToNumber("192.0.2.2")
+local tcpBytes = netlib.encodeTCPPacket(tcpSource, tcpDestination, 1234, 80, 100, 200, 0x18, 4096, "hello")
+local tcpPacket = assert(netlib.parseTCPPacket(tcpBytes, tcpSource, tcpDestination))
+equal(tcpPacket.sourcePort, 1234, "TCP source port")
+equal(tcpPacket.destinationPort, 80, "TCP destination port")
+equal(tcpPacket.sequence, 100, "TCP sequence")
+equal(tcpPacket.acknowledgement, 200, "TCP acknowledgement")
+equal(tcpPacket.payload, "hello", "TCP payload")
+equal(tcpPacket.flags, 0x18, "TCP flags")
+local badTCP = tcpBytes:sub(1, 20) .. "x" .. tcpBytes:sub(22)
+equal(netlib.parseTCPPacket(badTCP, tcpSource, tcpDestination), nil, "bad TCP checksum rejected")
+
 local transmitted = {}
 local modem = {
     open = function() end,
@@ -125,6 +137,93 @@ assert(ephemeral:bind("0.0.0.0", 0))
 equal(ephemeral.port, 49152, "port zero requests an ephemeral port")
 assert(stack:registerProtocol(6, function() end))
 
+local tcpFrames = {}
+local tcpStack = netlib.new()
+local tcpModem = {
+    open = function() end, close = function() end,
+    transmit = function(_, _, message) tcpFrames[#tcpFrames + 1] = message end
+}
+assert(tcpStack:addInterface("eth0", tcpModem, { mac = "02:00:00:00:04:01" }))
+assert(tcpStack:addAddress("eth0", "198.51.100.10/24"))
+assert(tcpStack.interfaces.eth0.arp)
+tcpStack._resolve = function() return "\2\0\0\0\4\2" end
+local tcpSocket = assert(tcpStack:socket(netlib.AF_INET, netlib.SOCK_STREAM))
+local oldTCPStartTimer, oldTCPPullEvent = os.startTimer, os.pullEvent
+local peerSequence, tcpTimer = 7000, 0
+os.startTimer = function() tcpTimer = tcpTimer + 1; return tcpTimer end
+os.pullEvent = function()
+    if tcpSocket.state == "SYN_SENT" then
+        local reply = netlib.encodeTCPPacket(netlib.ipv4ToNumber("198.51.100.20"), tcpSocket.address,
+            80, tcpSocket.port, peerSequence, tcpSocket.sndNxt, 0x12, 4096, "")
+        tcpStack:_handleTCP(tcpStack.interfaces.eth0, "\2\0\0\0\4\2", {
+            source = netlib.ipv4ToNumber("198.51.100.20"), destination = tcpSocket.address, payload = reply
+        })
+    elseif tcpSocket.sndUna ~= tcpSocket.sndNxt then
+        local reply = netlib.encodeTCPPacket(netlib.ipv4ToNumber("198.51.100.20"), tcpSocket.address,
+            80, tcpSocket.port, peerSequence, tcpSocket.sndNxt, 0x10, 4096, "")
+        tcpStack:_handleTCP(tcpStack.interfaces.eth0, "\2\0\0\0\4\2", {
+            source = netlib.ipv4ToNumber("198.51.100.20"), destination = tcpSocket.address, payload = reply
+        })
+    end
+    return "netlib_tcp", tcpSocket.id
+end
+assert(tcpSocket:connect("198.51.100.20", 80, 2))
+equal(tcpSocket.state, "ESTABLISHED", "TCP three-way handshake")
+equal(tcpSocket:send("request"), 7, "TCP send waits for acknowledgement")
+local response = "HTTP/1.1 200 OK\r\n\r\nhello"
+local responseSegment = netlib.encodeTCPPacket(netlib.ipv4ToNumber("198.51.100.20"), tcpSocket.address,
+    80, tcpSocket.port, tcpSocket.rcvNxt, tcpSocket.sndNxt, 0x18, 4096, response)
+tcpStack:_handleTCP(tcpStack.interfaces.eth0, "\2\0\0\0\4\2", {
+    source = netlib.ipv4ToNumber("198.51.100.20"), destination = tcpSocket.address, payload = responseSegment
+})
+equal(tcpSocket:recv(4096, 0), response, "TCP ordered stream receive")
+local finSegment = netlib.encodeTCPPacket(netlib.ipv4ToNumber("198.51.100.20"), tcpSocket.address,
+    80, tcpSocket.port, tcpSocket.rcvNxt, tcpSocket.sndNxt, 0x11, 4096, "")
+tcpStack:_handleTCP(tcpStack.interfaces.eth0, "\2\0\0\0\4\2", {
+    source = netlib.ipv4ToNumber("198.51.100.20"), destination = tcpSocket.address, payload = finSegment
+})
+equal(tcpSocket:recv(4096, 0), "", "TCP FIN reports EOF")
+tcpSocket:close()
+os.startTimer, os.pullEvent = oldTCPStartTimer, oldTCPPullEvent
+
+local listenerFrames = {}
+local listenerStack = netlib.new()
+local listenerModem = {
+    open = function() end, close = function() end,
+    transmit = function(_, _, message) listenerFrames[#listenerFrames + 1] = message end
+}
+assert(listenerStack:addInterface("eth0", listenerModem, { mac = "02:00:00:00:05:01" }))
+assert(listenerStack:addAddress("eth0", "203.0.113.10/24"))
+local listener = assert(listenerStack:socket(netlib.AF_INET, netlib.SOCK_STREAM))
+assert(listener:bind("203.0.113.10", 8080))
+assert(listener:listen(2))
+local listenerLocal, listenerRemote = netlib.ipv4ToNumber("203.0.113.10"), netlib.ipv4ToNumber("203.0.113.20")
+local clientMAC = "\2\0\0\0\5\2"
+local initialSYN = netlib.encodeTCPPacket(listenerRemote, listenerLocal, 40000, 8080, 5000, 0, 0x02, 4096, "")
+listenerStack:_handleTCP(listenerStack.interfaces.eth0, clientMAC, {
+    source = listenerRemote, destination = listenerLocal, payload = initialSYN
+})
+local synAckFrame = assert(netlib.parseEthernet(listenerFrames[#listenerFrames]))
+local synAckIP = assert(netlib.parseIPv4Packet(synAckFrame.payload))
+local synAck = assert(netlib.parseTCPPacket(synAckIP.payload, listenerLocal, listenerRemote))
+equal(synAck.flags, 0x12, "listener responds to SYN with SYN-ACK")
+local finalACK = netlib.encodeTCPPacket(listenerRemote, listenerLocal, 40000, 8080, 5001,
+    synAck.sequence + 1, 0x10, 4096, "")
+listenerStack:_handleTCP(listenerStack.interfaces.eth0, clientMAC, {
+    source = listenerRemote, destination = listenerLocal, payload = finalACK
+})
+local accepted = assert(listener:accept(0))
+equal(accepted.state, "ESTABLISHED", "listener accepts completed handshake")
+accepted:close()
+equal(accepted.state, "FIN_WAIT_1", "close sends TCP FIN without blocking")
+local closeACK = netlib.encodeTCPPacket(listenerRemote, listenerLocal, 40000, 8080, 5001,
+    accepted.sndNxt, 0x10, 4096, "")
+listenerStack:_handleTCP(listenerStack.interfaces.eth0, clientMAC, {
+    source = listenerRemote, destination = listenerLocal, payload = closeACK
+})
+equal(accepted.state, "CLOSED", "TCP connection closes after FIN acknowledgement")
+listener:close()
+
 local forwardedFrames = {}
 local router = netlib.new()
 local inside = { open = function() end, close = function() end, transmit = function() end }
@@ -166,6 +265,10 @@ assert(forwardedFrame, "router should forward through the selected interface")
 local forwardedPacket = assert(netlib.parseIPv4Packet(forwardedFrame.payload))
 equal(forwardedPacket.ttl, 7, "router decrements TTL")
 equal(forwardedPacket.payload, "forwarded", "router preserves payload")
+local paddedIPv4 = forwardedFrame.payload .. string.rep("\0", math.max(0, 46 - #forwardedFrame.payload))
+assert(netlib.parseIPv4Packet(paddedIPv4), "legal Ethernet padding after IPv4 is ignored")
+equal(netlib.parseIPv4Packet(forwardedFrame.payload .. string.rep("\0", 47)), nil,
+    "excessive data after IPv4 packet is rejected")
 
 local icmpFrames = {}
 local icmpStack = netlib.new()
@@ -240,6 +343,60 @@ equal(pingCalls, 2, "ping command sends requested count")
 _G.net = nil
 _G.netlib = nil
 _G.sleep = nil
+
+local dnsQuery, httpRequest, httpOutput, httpClosed
+local fakeTCP = {}
+function fakeTCP:connect(address, port, timeout)
+    equal(address, "203.0.113.80", "HTTP resolves hostname to IPv4")
+    equal(port, 8080, "HTTP custom port")
+    equal(timeout, 10, "HTTP connect timeout")
+    return true
+end
+function fakeTCP:send(data)
+    httpRequest = data
+    return #data
+end
+function fakeTCP:recv()
+    if not self.chunks then self.chunks = { "HTTP/1.1 200 OK\r\n\r\n", "body", "" } end
+    return table.remove(self.chunks, 1)
+end
+function fakeTCP:close() httpClosed = true end
+
+local fakeHTTPStack = {}
+function fakeHTTPStack:socket(_, socketType)
+    if socketType == netlib.SOCK_DGRAM then
+        return {
+            bind = function() return true end,
+            sendto = function(_, query, server, port)
+                equal(server, "192.0.2.53", "HTTP DNS server")
+                equal(port, 53, "HTTP DNS port")
+                dnsQuery = query
+                return #query
+            end,
+            recvfrom = function()
+                local queryID = string.unpack(">I2", dnsQuery)
+                local question = dnsQuery:sub(13)
+                local answer = string.pack(">I2I2I2I2I2I2", queryID, 0x8180, 1, 1, 0, 0) ..
+                    question .. "\192\012" .. string.pack(">I2I2I4I2", 1, 1, 60, 4) .. string.char(203, 0, 113, 80)
+                return answer, "192.0.2.53", 53
+            end,
+            close = function() end
+        }
+    end
+    equal(socketType, netlib.SOCK_STREAM, "HTTP uses TCP stream socket")
+    return fakeTCP
+end
+local oldNet, oldNetlib, oldWrite, oldPrintError = _G.net, _G.netlib, _G.write, _G.printError
+_G.net, _G.netlib = fakeHTTPStack, netlib
+_G.write = function(data) httpOutput = (httpOutput or "") .. data end
+_G.printError = function(message) error(message) end
+assert(loadfile("bin/httpget.lua"))("http://example.test:8080/path?q=one#fragment", "192.0.2.53")
+assert(httpRequest:find("GET /path?q=one HTTP/1.1\r\n", 1, true), "HTTP request line and query")
+assert(httpRequest:find("Host: example.test:8080\r\n", 1, true), "HTTP Host header")
+assert(httpRequest:find("Connection: close\r\n\r\n", 1, true), "HTTP/1.1 close framing")
+equal(httpOutput, "HTTP/1.1 200 OK\r\n\r\nbody", "HTTP response output")
+equal(httpClosed, true, "HTTP client closes TCP socket")
+_G.net, _G.netlib, _G.write, _G.printError = oldNet, oldNetlib, oldWrite, oldPrintError
 
 local malformed = string.pack(">BB", 0x45, 0) .. string.pack(">I2", 10) .. received[1].raw:sub(5)
 local parsed = netlib.parseIPv4Packet(malformed)

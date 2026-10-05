@@ -3,6 +3,7 @@
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/nltlco.lua": "nltlco.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/ip.lua": "bin/ip.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/ping.lua": "bin/ping.lua",
+    "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/httpget.lua": "bin/httpget.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/config/easyconfig.lua": "config/easyconfig.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/switch.lua": "bin/switch.lua",
     "https://raw.githubusercontent.com/PatriikPlays/netlib/refs/heads/main/bin/udpchat.lua": "bin/udpchat.lua",
